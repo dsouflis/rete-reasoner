@@ -3,7 +3,7 @@ ReteReasoner is a bare-bones forward-inference reasoner based on  [rete-next](ht
 another project of mine that implements a Rete engine.
 
 ## Usage
-`tsx src/index.ts` *<input-file>* (*<conflict-resolution-strategy>*)
+`tsx src/index.ts` *input-file* (*conflict-resolution-strategy*)
 
 ### Input File
 The input file consists of asserts, productions and queries. Asserts and productions are executed as they are read.
