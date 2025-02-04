@@ -1,0 +1,35 @@
+(!  (duck is-a bird)
+    (robbin is-a bird)
+    (dodo is-a bird)
+)
+
+(!  (duck fly can)
+    (dodo fly cannot)
+)
+
+(   (<species> is-a bird)
+    -{(<species> fly <_>)}
+-> "Default values"
+    (!
+        (<species> fly can)    )
+)
+
+
+(   (<species> fly can)
+-> "Hunting possibility by shooting"
+    (!
+        (<species> hunting-possible-by shooting)
+    )
+)
+
+(   (<species> fly cannot)
+-> "Hunting possibility by shooting or chasing"
+    (!  (<species> hunting-possible-by shooting)
+        (<species> hunting-possible-by chasing)
+    )
+)
+
+(   (<species> hunting-possible-by <mode>)
+->
+    <species>, <mode>
+)

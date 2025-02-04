@@ -1,0 +1,47 @@
+(!
+ (Adam father Cain)
+ (Adam father Abel)
+ (Adam father Seth)
+ (Eve mother Cain)
+ (Eve mother Abel)
+ (Eve mother Seth)
+ (Seth father Enosh)
+ (Enosh father Kenan)
+ (Kenan father Mahalalel)
+ (Mahalalel father Jared)
+ (Jared father Enoch)
+ (Enoch father Methuselah)
+ (Methuselah father Lamech)
+ (Lamech father Noah)
+ (Noah father Shem)
+ (Noah father Ham)
+ (Noah father Japheth)
+ (Terah father Abram)
+ (Terah father Nahor)
+ (Terah father Haran)
+ (Haran father Lot)
+ (Abram father Isaac)
+ (Sarah mother Isaac)
+ (Abraham father Ishmael)
+ (Isaac father Esau)
+ (Isaac father Jacob)
+ (Rebekah mother Esau)
+ (Rebekah mother Jacob)
+ (Jacob father Reuben)
+ (Jacob father Judah)
+)
+
+(
+ (<x> father <z>)
+ (<y> mother <z>)
+-> "find couples with children"
+ (!
+   (<x> husband <y>)
+ )
+)
+
+(
+ (<x> husband <y>)
+->
+ <x>,<y>
+)

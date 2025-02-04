@@ -1,0 +1,42 @@
+(!  (duck is-a bird)
+    (robbin is-a bird)
+    (dodo is-a bird)
+)
+
+(!  (duck fly can)
+    (dodo fly cannot)
+)
+
+(   (<species> is-a bird)
+    -{(<species> fly <_>)}
+-> "1. Default values prepare"
+    (!
+        (<species> fly-prepare can)
+    )
+)
+
+(   (<species> fly-prepare can)
+-> "2. Default values commit"
+    (!
+        (<species> fly can)
+    )
+)
+
+(   (<species> fly can)
+-> "3. Hunting possibility by shooting"
+    (!
+        (<species> hunting-possible-by shooting)
+    )
+)
+
+(   (<species> fly cannot)
+-> "3. Hunting possibility by shooting or chasing"
+    (!  (<species> hunting-possible-by shooting)
+        (<species> hunting-possible-by chasing)
+    )
+)
+
+(   (<species> hunting-possible-by <mode>)
+->
+    <species>, <mode>
+)
