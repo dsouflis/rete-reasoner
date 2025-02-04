@@ -1,12 +1,5 @@
 import {readFile} from 'fs/promises';
-import {
-  evalVariablesInToken,
-  GenericCondition,
-  ProductionNode,
-  Rete,
-  Token,
-  WME
-} from 'rete-next/index';
+import {evalVariablesInToken, GenericCondition, ProductionNode, Rete, Token, WME} from 'rete-next/index';
 import {ParseError, parseRete, ParseSuccess} from 'rete-next/productions0';
 import {AggregateCondition, NegativeCondition, PositiveCondition} from "rete-next";
 
@@ -50,6 +43,13 @@ type WMEJustification = {
   justifications: Justification[],
 };
 
+type conflictResolutionFunction = (conflicts: ConflictItem[]) => ConflictItem | undefined;
+type conflictResolutionStrategy = {
+  name: string,
+  init: () => void,
+  fnc: conflictResolutionFunction,
+}
+
 const rete = new Rete();
 const parsedProductions = reteParseProductions as ParseSuccess;
 const productions: ProductionSpec[] = [];
@@ -85,10 +85,86 @@ if(nonDeterministicFixpointPossible) {
   console.log('WARNING: Conflict resolution strategies not available, defaulting to first-match');
 }
 
+function firstMatchConflictResolution(conflicts: ConflictItem[]): ConflictItem | undefined {
+  return conflicts[0];
+}
+
+let currentStratum = 0;
+let strata: ProductionSpec[][];
+
+function createStrata() {
+  let strataCount = 0;
+  for (const productionSpec of productions) {
+    const rhs = productionSpec.production.rhs;
+    const strings = rhs.split('.');
+    const number = Number.parseInt(strings[0]);
+    if(!Number.isNaN(number)) {
+      if(strataCount < number) {
+        strataCount = number;
+      }
+    }
+  }
+  strata = new Array(strataCount);
+  for (const productionSpec of productions) {
+    const rhs = productionSpec.production.rhs;
+    const strings = rhs.split('.');
+    const number = Number.parseInt(strings[0]);
+    if(!Number.isNaN(number)) {
+      if(!strata[number-1]) {
+        strata[number-1] = [];
+      }
+      strata[number-1].push(productionSpec);
+    }
+  }
+}
+
+function stratifiedManual(conflicts: ConflictItem[]): ConflictItem | undefined {
+  if(!strata) {
+    createStrata();
+  }
+  do {
+    const productionRhses = strata[currentStratum].map(x => x.production.rhs);
+    const found = conflicts.find(c => productionRhses.includes(c.productionSpec.production.rhs));
+    if(found) {
+      return found;
+    }
+    currentStratum++;
+  } while(currentStratum < strata.length);
+  return undefined;
+}
+
+const conflictResolutionStrategies: conflictResolutionStrategy[] = [
+  {
+    name: 'firstMatch',
+    init: () => {},
+    fnc: firstMatchConflictResolution,
+  },
+  {
+    name: 'stratifiedManual',
+    init: createStrata,
+    fnc: stratifiedManual,
+  },
+];
+
+let selectedConflictResolutionStrategy = conflictResolutionStrategies[0];
+
+if(!process.argv[3]) {
+  console.log(`No conflict resolution strategy specified, defaulting to: ${selectedConflictResolutionStrategy.name}`);
+} else {
+  const found = conflictResolutionStrategies.find(crs => crs.name.toLowerCase().startsWith(process.argv[3].toLowerCase()));
+  if(found) {
+    selectedConflictResolutionStrategy = found;
+    console.log(`Conflict resolution strategy specified: ${selectedConflictResolutionStrategy.name}`);
+  } else {
+    console.log(`Conflict resolution strategy specified was not found, defaulting to: ${selectedConflictResolutionStrategy.name}`);
+  }
+}
+
+
 const MAX_CYCLES = 100;
 let cycle = 1;
 
-function resolveConflicts() {
+function findConflictSet() {
   const conflicts: ConflictItem[] = [];
   for (const productionSpec of productions) {
     const tokensToAddOrRemove = productionSpec.production.canFire();
@@ -98,21 +174,23 @@ function resolveConflicts() {
         tokensToAddOrRemove,
       })
     }
-    if(conflicts.length === 0) return null;
-    let conflictItem = conflicts[0];
-    return conflictItem;
   }
+  return conflicts;
 }
 
 function run() {
   do {
     console.log(`Cycle ${cycle}`);
-    const conflictItem = resolveConflicts();
-    if (conflictItem === null) {
+    const conflicts = findConflictSet();
+    if (conflicts.length === 0) {
       console.log('No more productions');
       break;
     }
-    let production = conflictItem.productionSpec.production;
+    const conflictItem = selectedConflictResolutionStrategy.fnc(conflicts);
+    if (!conflictItem) {
+      console.log('No more productions');
+      break;
+    }    let production = conflictItem.productionSpec.production;
     console.log(production.rhs);
     let [tokensToAdd, tokensToRemove] = production.willFire();
     for (const token of tokensToRemove) {
