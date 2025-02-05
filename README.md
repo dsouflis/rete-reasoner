@@ -117,7 +117,7 @@ This is not yet implemented. The idea is to find the dependencies among rules an
 automatically.
 
 ## Schema Checking
-The directive `#schema` can be used to defined allowed patterns of facts and conditions. These serve as plain comments,
+The directive `#schema` can be used to define allowed patterns of facts and conditions. These serve as plain comments,
 unless schema checking is enabled with the directive `#schemacheck on`. It can be disabled with `#schemacheck off` and
 only facts and rules that are in sections of the file where schema checking is on are checked. Check failure just
 produces warnings. It does not stop execution of the ruleset.
