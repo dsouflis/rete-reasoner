@@ -6,12 +6,15 @@ another project of mine that implements a Rete engine.
 `tsx src/index.ts` *input-file* (*conflict-resolution-strategy*)
 
 ### Input File
-The input file consists of asserts, productions and queries. Asserts and productions are executed as they are read.
-Queries are executed after the system converges into a stable state, or if a maximum number of cycles is reached.
+The input file consists of directives (starting with `#`), asserts, productions and queries. Directives, asserts and productions are executed as they are read.
+Queries are executed after running the system. 
+
+## Running
+Running the system cycles until the system converges into a stable state, or if a maximum number of cycles is reached.
 
 ### Conflict Resolution Strategy Argument
 The optional argument after the input file path is used to select a Conflict Resolution Strategy (see below).
-The first strategy that matches (in a case-insensitive manner) the argument as a prefix is selected.
+The first strategy that matches the argument as a (case-insensitive) prefix is selected.
 
 ## Truth Maintenance
 The reasoner uses a justification-based truth maintenance system, with a similar concept as the demonstration
@@ -30,11 +33,9 @@ produces a different stable state, is to *stratify* the rules (see below).
 An example of an input file to use with the default strategy, is [test.rete](./test.rete).
 
 ### Stratified (Manual) Strategy
-The only other strategy currently implemented is the "stratifiedManual" strategy. It relies on prepending each 
-rules RHS name with a number and a dot, like this: `1. Rule name`. The numbers should be 1 and higher, without gaps
-in the numbering. All productions with the same number belong to the same *stratum*. Conflict resolution starts at
-stratum #1 and, every time no production in a stratum is found to be eligible, the stratum is abandoned
-and conflict resolution proceeds with the subsequent strata.
+The only other strategy currently implemented is the "stratifiedManual" strategy. It relies on separating productions
+with the `#stratum` directive. Conflict resolution starts at the first stratum and, every time no production in a stratum 
+is found to be eligible, the stratum is abandoned and conflict resolution proceeds with the subsequent strata.
 
 An example of an input file to use with this strategy, is [test2.rete](./test2.rete). Let's examine how this
 strategy can help implementing *default logic*. Suppose we want to implement the rule that, in the absense of
@@ -114,3 +115,35 @@ between maintaining logical consistency and "anything goes".
 ### Stratified (Automatic) Strategy
 This is not yet implemented. The idea is to find the dependencies among rules and break them up in strata 
 automatically.
+
+## Schema Checking
+The directive `#schema` can be used to defined allowed patterns of facts and conditions. These serve as plain comments,
+unless schema checking is enabled with the directive `#schemacheck on`. It can be disabled with `#schemacheck off` and
+only facts and rules that are in sections of the file where schema checking is on are checked. Check failure just
+produces warnings. It does not stop execution of the ruleset.
+
+Example from [test2.rete](./test2.rete):
+
+```
+#schema _ is-a _
+#schema _ fly can
+#schema _ fly cannot
+#schema _ fly-prepare can
+#schema _ hunting-possible-by shooting
+#schema _ hunting-possible-by chasing
+```
+
+This set of directives means that only the following attributes are accepted: 
+- Attribute `is-a` does not constrain its id and value.
+- Attribute `fly` only accepts `can` and `cannot` as values.
+- Attribute `fly-prepare` only accepts `can` as a value.
+- Attribute `hunting-possible-by` only accepts `shooting` and `chasing` as values.
+
+You can see an example of warnings if you run [schema-fail.rete](./schema-fail.rete). Examine the schema patterns
+and witness how the system warns of the following:
+
+```
+No schema registered for attribute is-a
+No schema pattern matches WME (duck fly canitreally)
+No schema pattern matches condition (<species> fly-prepare itcan)
+```

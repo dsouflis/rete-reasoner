@@ -1,44 +1,43 @@
-#schema _ is-a _
 #schema _ fly can
 #schema _ fly cannot
-#schema _ fly-prepare can
 #schema _ hunting-possible-by shooting
 #schema _ hunting-possible-by chasing
+#schema _ fly-prepare can
+#schemacheck on
 (!  (duck is-a bird)
     (robbin is-a bird)
     (dodo is-a bird)
-)
-
-(!  (duck fly can)
+    (duck fly canitreally)
     (dodo fly cannot)
 )
+
 
 (   (<species> is-a bird)
     -{(<species> fly <_>)}
 -> "1. Default values prepare"
     (!
-        (<species> fly-prepare can)
+        (<species> fly-prepare itcan)
     )
 )
 #stratum
 (   (<species> fly-prepare can)
 -> "2. Default values commit"
     (!
-        (<species> fly can)
+        (<species> fly itcan)
     )
 )
 #stratum
 (   (<species> fly can)
 -> "3. Hunting possibility by shooting"
     (!
-        (<species> hunting-possible-by shooting)
+        (<species> hunting-possible-by rifle)
     )
 )
 
 (   (<species> fly cannot)
 -> "3. Hunting possibility by shooting or chasing"
-    (!  (<species> hunting-possible-by shooting)
-        (<species> hunting-possible-by chasing)
+    (!  (<species> hunting-possible-by rifle)
+        (<species> hunting-possible-by running)
     )
 )
 

@@ -1,3 +1,6 @@
+#schema _ father _
+#schema _ mother _
+#schema _ husband _
 (!
  (Adam father Cain)
  (Adam father Abel)

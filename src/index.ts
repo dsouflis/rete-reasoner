@@ -1,6 +1,9 @@
 import {readFile} from 'fs/promises';
 import {
+  Condition,
   evalVariablesInToken,
+  Field,
+  FieldType,
   GenericCondition,
   ProductionNode,
   Rete,
@@ -9,21 +12,6 @@ import {
 } from 'rete-next/index';
 import {ParseError, parseRete, ParseSuccess} from 'rete-next/productions0';
 import {AggregateCondition, NegativeCondition, PositiveCondition} from "rete-next";
-
-if(process.argv.length < 3) {
-  console.warn('Usage: node index.js <file with Rete productions>');
-  process.exit();
-}
-
-let input: string = await readFile(process.argv[2], 'UTF8') as string;
-
-const reteParseProductions = parseRete(input);
-
-if(!('specs' in reteParseProductions)) {
-  let parseError = reteParseProductions as ParseError;
-  console.error(parseError.error);
-  process.exit();
-}
 
 type ProductionJustification = {
   token:Token,
@@ -53,81 +41,216 @@ type WMEJustification = {
 type conflictResolutionFunction = (conflicts: ConflictItem[]) => ConflictItem | undefined;
 type conflictResolutionStrategy = {
   name: string,
-  init: () => void,
   fnc: conflictResolutionFunction,
 }
 
+type PatternsForAttribute = {
+  id: undefined | string,
+  val: undefined | string,
+}
+
+
 const rete = new Rete();
-const parsedProductions = reteParseProductions as ParseSuccess;
+
 const productions: ProductionSpec[] = [];
+let stratumBeingRead = 0;
+let strata: ProductionSpec[][] = [[]];
 const queries: Query[] = [];
 let justifications: WMEJustification[] = [];
 let nonDeterministicFixpointPossible = false;
+const patternsForAttributes: {[attr:string]:PatternsForAttribute[]} = {};
+let schemaCheck = false;
 
-for(const {lhs, rhs, rhsAssert, variables} of parsedProductions.specs) {
-  if(!rhs && !rhsAssert && !variables) { //Assert
-    let wmes = rete.addWMEsFromConditions(lhs);
-    console.log(`Added ${wmes[0].length} WME${wmes[0].length === 1?'':'s'}`);
-    for (const wme of wmes[0]) {
-      justifications.push({wme, justifications: [{axiomatic: true}]});
+function tryMatchPatternInWME(wme: WME, patternsForAttribute: PatternsForAttribute[]) {
+  for (const patternForAttribute of patternsForAttribute) {
+    const {id, val} = patternForAttribute;
+    let ok = true;
+    if(id) {
+      const idPat = wme.fields[0];
+      ok &&= id === idPat;
     }
-  } else if(variables && !rhsAssert) { //Query
-    queries.push({lhs, variables})
-  } else if(rhs) {
-    const unsafeCondition = !!lhs.find(c => c instanceof AggregateCondition
-      || c instanceof NegativeCondition || c instanceof PositiveCondition
-    );
-    nonDeterministicFixpointPossible ||= unsafeCondition;
-    let production = rete.addProduction(lhs, rhs);
-    productions.push({
-      production,
-      rhsAssert,
-    });
-    console.log(`Added production: "${rhs}"`);
+    if(val) {
+      const valPat = wme.fields[2];
+      ok &&= val === valPat;
+    }
+    if(ok) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function tryMatchPatternInCondition(cond: Condition, patternsForAttribute: PatternsForAttribute[]) {
+  for (const patternForAttribute of patternsForAttribute) {
+    const {id, val} = patternForAttribute;
+    let okId = true;
+    let okVal = true;
+    if(id && cond.attrs[0] instanceof Field && (cond.attrs[0] as Field).type === FieldType.Const) {
+      const idPat = (cond.attrs[0] as Field).v;
+      okId= id === idPat;
+    }
+    if(val && cond.attrs[2] instanceof Field && (cond.attrs[2] as Field).type === FieldType.Const) {
+      const valPat = (cond.attrs[2] as Field).v;
+      okVal = val === valPat;
+    }
+    if(okId && okVal) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function checkWMEAgainstSchema(wme: WME) {
+  const attr = wme.fields[1];
+  const patternsForAttribute = patternsForAttributes[attr];
+  if (!patternsForAttribute) {
+    console.warn(`No schema registered for attribute ${attr}`);
+  } else {
+    const ok = tryMatchPatternInWME(wme, patternsForAttribute);
+    if (!ok) {
+      console.warn(`No schema pattern matches WME ${wme.toString()}`);
+    }
   }
 }
 
-if(nonDeterministicFixpointPossible) {
-  console.log('Non-deterministic fixpoint cannot be ruled out');
+function checkConditionsAgainstSchema(lhs: GenericCondition[]) {
+  for (const cond of lhs) {
+    if(cond instanceof Condition && cond.attrs[1] instanceof Field && (cond.attrs[1] as Field).type === FieldType.Const) {
+      const attr = (cond.attrs[1] as Field).v;
+      const patternsForAttribute = patternsForAttributes[attr];
+      if(!patternsForAttribute) {
+        console.warn(`No schema registered for attribute ${attr}`);
+      } else {
+        const ok = tryMatchPatternInCondition(cond, patternsForAttribute);
+        if(!ok) {
+          console.warn(`No schema pattern matches condition ${cond.toString()}`);
+        }
+      }
+      if(cond instanceof AggregateCondition) {
+        checkConditionsAgainstSchema(cond.innerConditions);
+      }
+    } else if('negativeConditions' in cond) { //instanceof does not work!
+      checkConditionsAgainstSchema(cond.negativeConditions);
+    } else if('positiveConditions' in cond) { //instanceof does not work!
+      checkConditionsAgainstSchema(cond.positiveConditions);
+    }
+  }
 }
+
+function parseAndExecute(input: string) {
+  const reteParseProductions = parseRete(input);
+
+  if(!('specs' in reteParseProductions)) {
+    let parseError = reteParseProductions as ParseError;
+    console.error(parseError.error);
+    process.exit();
+  }
+  const parsedProductions = reteParseProductions as ParseSuccess;
+
+  for (const {lhs, rhs, rhsAssert, variables} of parsedProductions.specs) {
+    if (!rhs && !rhsAssert && !variables) { //Assert
+      let wmes = rete.addWMEsFromConditions(lhs);
+      console.log(`Added ${wmes[0].length} WME${wmes[0].length === 1 ? '' : 's'}`);
+      for (const wme of wmes[0]) {
+        justifications.push({wme, justifications: [{axiomatic: true}]});
+        schemaCheck && checkWMEAgainstSchema(wme);
+      }
+    } else if (variables && !rhsAssert) { //Query
+      queries.push({lhs, variables});
+      schemaCheck && checkConditionsAgainstSchema(lhs);
+    } else if (rhs) {
+      const unsafeCondition = !!lhs.find(c => c instanceof AggregateCondition
+        || c instanceof NegativeCondition || c instanceof PositiveCondition
+      );
+      nonDeterministicFixpointPossible ||= unsafeCondition;
+      let production = rete.addProduction(lhs, rhs);
+      const productionSpec = {
+        production,
+        rhsAssert,
+      };
+      productions.push(productionSpec);
+      strata[stratumBeingRead].push(productionSpec);
+      console.log(`Added production: "${rhs}"`);
+      if (schemaCheck) {
+        checkConditionsAgainstSchema(lhs);
+        rhsAssert && checkConditionsAgainstSchema(rhsAssert);
+      }
+    }
+  }
+
+  if (nonDeterministicFixpointPossible) {
+    console.log('Non-deterministic fixpoint cannot be ruled out');
+  }
+}
+
+const stratumDirective = '#stratum';
+const schemaCheckDirective = '#schemacheck';
+const schemaDirective = '#schema';
+
+function executeDirective(dir: string) {
+  if(dir.startsWith(stratumDirective)) {
+    strata.push([]);
+    stratumBeingRead++;
+    console.log(`Now reading stratum #${stratumBeingRead}`);
+  } else if(dir.startsWith(schemaCheckDirective)) {
+    const s = dir.substring(schemaCheckDirective.length).trim();
+    if(!['on', 'off'].includes(s)) {
+      console.warn(`Malformed directive ${dir}`);
+      return;
+    }
+    schemaCheck = s === 'on';
+  } else if(dir.startsWith(schemaDirective)) {
+    const patterns = dir.substring(schemaDirective.length).trim();
+    const strings = patterns.split(' ');
+    if(strings.length !== 3 || strings[1] === '_') {
+      console.warn(`Malformed directive ${dir}`);
+      return;
+    }
+    const [id, attr, val] = strings;
+    if(!patternsForAttributes[attr]) {
+      patternsForAttributes[attr] = [];
+    }
+    patternsForAttributes[attr].push({
+      id: id === '_' ? undefined : id,
+      val: val === '_' ? undefined : val,
+    });
+  }
+}
+
+function readInputInterpretDirectivesAndParseAndExecute(input) {
+  const lines = input.split('\n');
+  let clauses = '';
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    if(trimmedLine.startsWith('#')) {
+      executeDirective(trimmedLine);
+      if(clauses) {
+        parseAndExecute(clauses);
+        clauses = '';
+      }
+    } else {
+      clauses += line + '\n';
+    }
+  }
+  if(clauses) {
+    parseAndExecute(clauses);
+  }
+}
+
+if(process.argv.length < 3) {
+  console.warn('Usage: node index.js <file with Rete productions>');
+  process.exit();
+}
+
+let input: string = await readFile(process.argv[2], 'UTF8') as string;
+
+readInputInterpretDirectivesAndParseAndExecute(input);
 
 function firstMatchConflictResolution(conflicts: ConflictItem[]): ConflictItem | undefined {
   return conflicts[0];
 }
 
-let currentStratum = 0;
-let strata: ProductionSpec[][];
-
-function createStrata() {
-  let strataCount = 0;
-  for (const productionSpec of productions) {
-    const rhs = productionSpec.production.rhs;
-    const strings = rhs.split('.');
-    const number = Number.parseInt(strings[0]);
-    if(!Number.isNaN(number)) {
-      if(strataCount < number) {
-        strataCount = number;
-      }
-    }
-  }
-  strata = new Array(strataCount);
-  for (const productionSpec of productions) {
-    const rhs = productionSpec.production.rhs;
-    const strings = rhs.split('.');
-    const number = Number.parseInt(strings[0]);
-    if(!Number.isNaN(number)) {
-      if(!strata[number-1]) {
-        strata[number-1] = [];
-      }
-      strata[number-1].push(productionSpec);
-    }
-  }
-}
-
 function stratifiedManual(conflicts: ConflictItem[]): ConflictItem | undefined {
-  if(!strata) {
-    createStrata();
-  }
   do {
     const productionRhses = strata[currentStratum].map(x => x.production.rhs);
     const found = conflicts.find(c => productionRhses.includes(c.productionSpec.production.rhs));
@@ -142,12 +265,10 @@ function stratifiedManual(conflicts: ConflictItem[]): ConflictItem | undefined {
 const conflictResolutionStrategies: conflictResolutionStrategy[] = [
   {
     name: 'firstMatch',
-    init: () => {},
     fnc: firstMatchConflictResolution,
   },
   {
     name: 'stratifiedManual',
-    init: createStrata,
     fnc: stratifiedManual,
   },
 ];
@@ -165,10 +286,6 @@ if(!process.argv[3]) {
     console.log(`Conflict resolution strategy specified was not found, defaulting to: ${selectedConflictResolutionStrategy.name}`);
   }
 }
-
-
-const MAX_CYCLES = 100;
-let cycle = 1;
 
 function findConflictSet() {
   const conflicts: ConflictItem[] = [];
@@ -249,35 +366,45 @@ function run() {
   } while (cycle++ <= MAX_CYCLES);
 }
 
+function runQueries() {
+  if (queries.length) {
+    console.log(`Running ${queries.length} ${queries.length === 1 ? 'query' : 'queries'}`);
+    for (const query of queries) {
+      const {lhs, variables} = query;
+      const stringToStringMaps = rete.query(lhs, variables);
+      for (let i = 0; i < stringToStringMaps.length; i++) {
+        const stringToStringMap = stringToStringMaps[i];
+        let entries = Object.entries(stringToStringMap);
+        for (const [key, value] of entries) {
+          console.log(`${i}||${key}:${value}`);
+        }
+      }
+    }
+  }
+}
+
+function showKnowledgeBase() {
+  if (justifications.length) {
+    console.log(`The working memory consists of ${justifications.length} WMEs`);
+    for (const {wme, justifications: j} of justifications) {
+      let jStrings = [];
+      for (const justification of j) {
+        if ('prod' in justification) {
+          let productionJustification = justification as ProductionJustification;
+          jStrings.push(`[${productionJustification.prod}:${productionJustification.token.toString()}]`);
+        } else {
+          jStrings.push('[Axiomatic]');
+        }
+      }
+      console.log(`${wme.toString()}: ${jStrings.join(',')}`);
+    }
+  }
+}
+
+let currentStratum = 0;
+const MAX_CYCLES = 100;
+let cycle = 1;
+
 run();
-
-if (queries.length) {
-  console.log(`Running ${queries.length} ${queries.length === 1?'query':'queries'}`);
-  for (const query of queries) {
-    const {lhs, variables} = query;
-    const stringToStringMaps = rete.query(lhs, variables);
-    for (let i = 0; i < stringToStringMaps.length; i++) {
-      const stringToStringMap = stringToStringMaps[i];
-      let entries = Object.entries(stringToStringMap);
-      for (const [key, value] of entries) {
-        console.log(`${i}||${key}:${value}`);
-      }
-    }
-  }
-}
-
-if(justifications.length) {
-  console.log(`The working memory consists of ${justifications.length} WMEs`);
-  for (const {wme, justifications: j} of justifications) {
-    let jStrings = [];
-    for (const justification of j) {
-      if('prod' in justification) {
-        let productionJustification = justification as ProductionJustification;
-        jStrings.push(`[${productionJustification.prod}:${productionJustification.token.toString()}]`);
-      } else {
-        jStrings.push('[Axiomatic]');
-      }
-    }
-    console.log(`${wme.toString()}: ${jStrings.join(',')}`);
-  }
-}
+runQueries();
+showKnowledgeBase();
