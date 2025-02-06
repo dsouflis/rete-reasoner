@@ -34,7 +34,8 @@
     "rete-next": "../rete-next",
     "dfa": "^1.2.0",
     "ohm-js": "^17.1.0",
-    "command-line-args": "^6.0.1"
+    "command-line-args": "^6.0.1",
+    "@inquirer/prompts": "^6.0.1"
   },
   "devDependencies": {
     "chai": "^4.2.0",

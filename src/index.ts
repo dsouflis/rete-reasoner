@@ -1,4 +1,5 @@
 import {readFile} from 'fs/promises';
+import { input, confirm  } from '@inquirer/prompts';
 import commandLineArgs, {CommandLineOptions, OptionDefinition} from 'command-line-args'
 import {
   Condition,
@@ -54,12 +55,14 @@ interface Options extends CommandLineOptions{
   file: string,
   strategy: string,
   schemaCheck: boolean,
+  interactive: boolean,
 }
 
 const optionDefinitions: OptionDefinition[] = [
   { name: 'file', alias: 'f', type: String, defaultOption: true},
   { name: 'strategy', alias: 's', type: String},
   { name: 'schema-check', alias: 'c', type: Boolean, defaultValue: false},
+  { name: 'interactive', alias: 'i', type: Boolean, defaultValue: false},
 ];
 
 const options = commandLineArgs(optionDefinitions) as Options;
@@ -69,6 +72,7 @@ if(!options.file) {
   console.warn('  -f, --file           File with Rete productions');
   console.warn('  -s, --strategy       Conflict resolution strategy [optional]');
   console.warn('  -c, --schema-check   Enable schema check before reading file [optional]');
+  console.warn('  -i, --interactive    Launch interactive session after running [optional]');
   process.exit();
 }
 
@@ -259,9 +263,9 @@ function readInputInterpretDirectivesAndParseAndExecute(input) {
   }
 }
 
-let input: string = await readFile(options.file, 'UTF8') as string;
+let fileContents: string = await readFile(options.file, 'UTF8') as string;
 
-readInputInterpretDirectivesAndParseAndExecute(input);
+readInputInterpretDirectivesAndParseAndExecute(fileContents);
 
 function firstMatchConflictResolution(conflicts: ConflictItem[]): ConflictItem | undefined {
   return conflicts[0];
@@ -418,6 +422,48 @@ function showKnowledgeBase() {
   }
 }
 
+function interactiveRetract(prompt: string) {
+  const strings = prompt.trim().split(' ');
+  if(strings.length === 3) {
+    const found = rete.working_memory.find(w => w.fields[0] === strings[0] && w.fields[1] === strings[1] && w.fields[2] === strings[2]);
+    const foundJustification = justifications.find(j => j.wme === found);
+    if(!found || !foundJustification) {
+      console.warn(`No WME found matching (${strings[0]} ${strings[1]} ${strings[2]} )`);
+    } else {
+      const axiomaticJustification = foundJustification.justifications.find(jj => 'axiomatic' in jj);
+      if(!axiomaticJustification) {
+        console.warn(`WME does not have an axiomatic justification and cannot be retracted`);
+        return;
+      }
+      foundJustification.justifications = foundJustification.justifications.filter(jj => jj !== axiomaticJustification);
+      rete.removeWME(found);
+      run();
+      showKnowledgeBase();
+    }
+  } else {
+    console.error(`Malformed retract command ${prompt}`)
+  }
+}
+
+async function interactive() {
+  console.log('Use "quit", "exit" or "bye" to exit');
+  let contextLength = 0;
+  do {
+    try {
+      const answer = await input({message: '>'});
+      if (answer.toLowerCase() === 'bye' || answer.toLowerCase() === 'exit' || answer.toLowerCase() === 'quit') {
+        console.log('Bye to you, too');
+        break;
+      }
+      if(answer.toLowerCase().startsWith('retract')) {
+        interactiveRetract(answer.substring(7));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  } while (true);
+}
+
 let currentStratum = 0;
 const MAX_CYCLES = 100;
 let cycle = 1;
@@ -425,3 +471,7 @@ let cycle = 1;
 run();
 runQueries();
 showKnowledgeBase();
+
+if(options.interactive) {
+  await interactive();
+}
