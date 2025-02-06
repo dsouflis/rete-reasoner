@@ -3,7 +3,14 @@ ReteReasoner is a bare-bones forward-inference reasoner based on  [rete-next](ht
 another project of mine that implements a Rete engine.
 
 ## Usage
-`tsx src/index.ts` *input-file* (*conflict-resolution-strategy*)
+```
+Options
+  -f, --file           File with Rete productions
+  -s, --strategy       Conflict resolution strategy [optional]
+  -c, --schema-check   Enable schema check before reading file [optional]
+  -i, --interactive    Launch interactive session after running [optional]
+```
+Option `-f` is the default option so one can specify the file directly.
 
 ### Input File
 The input file consists of directives (starting with `#`), asserts, productions and queries. Directives, asserts and productions are executed as they are read.
@@ -147,3 +154,14 @@ No schema registered for attribute is-a
 No schema pattern matches WME (duck fly canitreally)
 No schema pattern matches condition (<species> fly-prepare itcan)
 ```
+
+## Interactive operation
+One can request an interactive shell after the execution of the file.
+
+The only command supported yet is "retract" with three arguments, as in:
+
+```
+√ > retract Sarah mother Isaac
+```
+Only WMEs with an axiomatic justifications can be specified. This retracts the axiomatic justification for the
+corresponding WME. If no other justification exists, the WME is removed from the working memory. 

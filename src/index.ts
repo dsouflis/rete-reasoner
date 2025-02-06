@@ -436,7 +436,10 @@ function interactiveRetract(prompt: string) {
         return;
       }
       foundJustification.justifications = foundJustification.justifications.filter(jj => jj !== axiomaticJustification);
-      rete.removeWME(found);
+      if (foundJustification.justifications.length === 0) {
+        rete.removeWME(found);
+        justifications = justifications.filter(j => j !== foundJustification);
+      }
       run();
       showKnowledgeBase();
     }
