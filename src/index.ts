@@ -1,4 +1,5 @@
 import {readFile} from 'fs/promises';
+import commandLineArgs, {CommandLineOptions, OptionDefinition} from 'command-line-args'
 import {
   Condition,
   evalVariablesInToken,
@@ -49,6 +50,27 @@ type PatternsForAttribute = {
   val: undefined | string,
 }
 
+interface Options extends CommandLineOptions{
+  file: string,
+  strategy: string,
+  schemaCheck: boolean,
+}
+
+const optionDefinitions: OptionDefinition[] = [
+  { name: 'file', alias: 'f', type: String, defaultOption: true},
+  { name: 'strategy', alias: 's', type: String},
+  { name: 'schema-check', alias: 'c', type: Boolean, defaultValue: false},
+];
+
+const options = commandLineArgs(optionDefinitions) as Options;
+
+if(!options.file) {
+  console.warn('Options');
+  console.warn('  -f, --file           File with Rete productions');
+  console.warn('  -s, --strategy       Conflict resolution strategy [optional]');
+  console.warn('  -c, --schema-check   Enable schema check before reading file [optional]');
+  process.exit();
+}
 
 const rete = new Rete();
 
@@ -59,7 +81,7 @@ const queries: Query[] = [];
 let justifications: WMEJustification[] = [];
 let nonDeterministicFixpointPossible = false;
 const patternsForAttributes: {[attr:string]:PatternsForAttribute[]} = {};
-let schemaCheck = false;
+let schemaCheck = options.schemaCheck;
 
 function tryMatchPatternInWME(wme: WME, patternsForAttribute: PatternsForAttribute[]) {
   for (const patternForAttribute of patternsForAttribute) {
@@ -237,12 +259,7 @@ function readInputInterpretDirectivesAndParseAndExecute(input) {
   }
 }
 
-if(process.argv.length < 3) {
-  console.warn('Usage: node index.js <file with Rete productions>');
-  process.exit();
-}
-
-let input: string = await readFile(process.argv[2], 'UTF8') as string;
+let input: string = await readFile(options.file, 'UTF8') as string;
 
 readInputInterpretDirectivesAndParseAndExecute(input);
 
@@ -275,10 +292,10 @@ const conflictResolutionStrategies: conflictResolutionStrategy[] = [
 
 let selectedConflictResolutionStrategy = conflictResolutionStrategies[0];
 
-if(!process.argv[3]) {
+if(!options.strategy) {
   console.log(`No conflict resolution strategy specified, defaulting to: ${selectedConflictResolutionStrategy.name}`);
 } else {
-  const found = conflictResolutionStrategies.find(crs => crs.name.toLowerCase().startsWith(process.argv[3].toLowerCase()));
+  const found = conflictResolutionStrategies.find(crs => crs.name.toLowerCase().startsWith(options.strategy.toLowerCase()));
   if(found) {
     selectedConflictResolutionStrategy = found;
     console.log(`Conflict resolution strategy specified: ${selectedConflictResolutionStrategy.name}`);
