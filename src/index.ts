@@ -1,6 +1,12 @@
 import {readFile} from 'fs/promises';
-import { input, confirm  } from '@inquirer/prompts';
+import {confirm, input} from '@inquirer/prompts';
 import commandLineArgs, {CommandLineOptions, OptionDefinition} from 'command-line-args'
+import {OpenAI} from 'openai';
+import {
+  ChatCompletionAssistantMessageParam,
+  ChatCompletionMessageParam,
+  ChatCompletionUserMessageParam
+} from "openai/resources";
 import {
   Condition,
   evalVariablesInToken,
@@ -49,6 +55,7 @@ type conflictResolutionStrategy = {
 type PatternsForAttribute = {
   id: undefined | string,
   val: undefined | string,
+  description: undefined | string,
 }
 
 interface Options extends CommandLineOptions{
@@ -57,6 +64,8 @@ interface Options extends CommandLineOptions{
   schemaCheck: boolean,
   interactive: boolean,
 }
+
+const openaiapikeyExists = !!process.env.OPENAI_API_KEY;
 
 const optionDefinitions: OptionDefinition[] = [
   { name: 'file', alias: 'f', type: String, defaultOption: true},
@@ -203,10 +212,6 @@ function parseAndExecute(input: string) {
       }
     }
   }
-
-  if (nonDeterministicFixpointPossible) {
-    console.log('Non-deterministic fixpoint cannot be ruled out');
-  }
 }
 
 const stratumDirective = '#stratum';
@@ -228,7 +233,7 @@ function executeDirective(dir: string) {
   } else if(dir.startsWith(schemaDirective)) {
     const patterns = dir.substring(schemaDirective.length).trim();
     const strings = patterns.split(' ');
-    if(strings.length !== 3 || strings[1] === '_') {
+    if(strings.length < 3 || strings[1] === '_') {
       console.warn(`Malformed directive ${dir}`);
       return;
     }
@@ -236,9 +241,11 @@ function executeDirective(dir: string) {
     if(!patternsForAttributes[attr]) {
       patternsForAttributes[attr] = [];
     }
+    const description = strings.slice(3).join(' ');
     patternsForAttributes[attr].push({
       id: id === '_' ? undefined : id,
       val: val === '_' ? undefined : val,
+      description: description || undefined,
     });
   }
 }
@@ -264,8 +271,6 @@ function readInputInterpretDirectivesAndParseAndExecute(input) {
 }
 
 let fileContents: string = await readFile(options.file, 'UTF8') as string;
-
-readInputInterpretDirectivesAndParseAndExecute(fileContents);
 
 function firstMatchConflictResolution(conflicts: ConflictItem[]): ConflictItem | undefined {
   return conflicts[0];
@@ -422,6 +427,69 @@ function showKnowledgeBase() {
   }
 }
 
+function interactiveHelp(prompt: string) {
+  const request = prompt.trim();
+
+  function showQuit() {
+    console.log(' quit, exit, bye               Exit');
+  }
+
+  function showRetract() {
+    console.log(' retract [str] [str] [str]     Retract axiomatic justification for WME ([str] [str] [str])');
+  }
+
+  function showRun() {
+    console.log(' run [clauses]                 Run the clauses provided');
+  }
+
+  function showHelp() {
+    console.log(' help [command]                Explain how [command] is used');
+  }
+
+  function showClear() {
+    console.log(' clear                         Reset the chat and start over');
+  }
+
+  function showChat() {
+    console.log(' [Prompt to chatbot]           Chat with ChatGPT');
+  }
+
+  if(!request) {
+    console.log('Commands');
+    showQuit();
+    showRetract();
+    showRun();
+    showClear();
+    showChat();
+    return;
+  }
+  switch (request) {
+    case 'help': {
+      showHelp();
+      break;
+    }
+    case 'quit':
+    case 'exit':
+    case 'bye': {
+      showQuit();
+      break;
+    }
+    case 'retract': {
+      showRetract();
+      break;
+    }
+    case 'run': {
+      showRun();
+      break;
+    }
+    case 'clear': {
+      showClear();
+      break;
+    }
+    default: console.log(`Unknown command ${prompt}`);
+  }
+}
+
 function interactiveRetract(prompt: string) {
   const strings = prompt.trim().split(' ');
   if(strings.length === 3) {
@@ -448,23 +516,292 @@ function interactiveRetract(prompt: string) {
   }
 }
 
+function interactiveRun(prompt: string) {
+  readInputInterpretDirectivesAndParseAndExecute(prompt);
+  run();
+  showKnowledgeBase();
+}
+
+interface OpenAiState {
+  contextLength: number,
+  history: HistoryItem[];
+}
+
+let openai: OpenAI;
+const openAiState: OpenAiState = {
+  contextLength: 0,
+  history: [],
+}
+
+interface HistoryItem {
+  prompt: ChatCompletionUserMessageParam,
+  promptTokens: number,
+  response: ChatCompletionAssistantMessageParam,
+  responseTokens: number,
+}
+
+const CONTEXT_TOKENS = 200; //a lot less than the allowed total number of tokens
+
+function createContextOfLength(n: number): ChatCompletionMessageParam[] {
+  n --;
+  let remainingTokens = CONTEXT_TOKENS;
+  const messages: ChatCompletionMessageParam[] = [];
+  for (let i = 0; i < openAiState.history.length; i++){
+    if(i > n) break;
+    const historyItem = openAiState.history[i];
+    if(historyItem.responseTokens > remainingTokens) break;
+    messages.push({
+      role: 'assistant',
+      content: historyItem.response.content,
+    } as ChatCompletionAssistantMessageParam);
+    remainingTokens -= historyItem.responseTokens;
+
+    if(historyItem.promptTokens > remainingTokens) break;
+    messages.push({
+      role: 'user',
+      content: historyItem.prompt.content,
+    } as ChatCompletionUserMessageParam);
+    remainingTokens -= historyItem.promptTokens;
+  }
+
+  return messages;
+}
+
+async function getOpenAiResponse(system: string, user: string, contextLength = 0) {
+  let messages: ChatCompletionMessageParam[] = [{
+    role: 'system',
+    content: system,
+  }];
+  let contextOfLength = createContextOfLength(contextLength);
+  // console.log(`Context of length ${contextLength}`, contextOfLength);
+  if(contextOfLength.length) {
+    messages = [...messages, ...contextOfLength];
+  }
+  let userMessage: ChatCompletionUserMessageParam = {
+    role: 'user',
+    content: user
+  };
+  messages.push(userMessage);
+  // console.log('Messages', messages);
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages,
+  });
+  openAiState.history.push({
+    prompt: userMessage,
+    promptTokens: response.usage?.prompt_tokens || 0,
+    response: response.choices[0].message,
+    responseTokens: response.usage?.completion_tokens || 0,
+  });
+  return response.choices[0].message;
+}
+
+function createSystemPrompt(schemaDescription: string) {
+  return `Please use the following triplet notation for Datalog queries:
+
+- **Triplet Structure:** Represent relationships as triplets within parentheses, without commas. Each triplet follows the format: \`(subject predicate object)\`.
+  
+- **Variables:** Enclose all variables within angle brackets \`< >\`. Examples of variables include \`<m>\`, \`<f>\`, \`<c>\`, \`<c2>\`, etc.
+  
+- **Constants:** Write constants (specific entities or known values) without angle brackets. For example, \`Esau\`.
+  
+- **No Commas in Triplets:** Do not use commas inside the triplets. The components are separated by spaces only.
+  
+- **Query Formation:** Combine multiple triplets to set conditions or express relationships. Use \`->\` to denote the result or output of the query.
+  
+- **Output Variables:** After the \`->\`, list the variables to output, separated by commas without additional parentheses or angle brackets.
+
+**Examples for sample predicates \`mother\`, \`father\`:**
+
+1. **Identifying Husband and Wife:**
+
+   \`\`\`
+   (<m> mother <c>) (<f> father <c>) -> <m>,<f>
+   \`\`\`
+   
+   - **Explanation:** Finds \`<m>\` and \`<f>\` who are the mother and father of the same child \`<c>\`, indicating they are husband and wife.
+
+2. **Finding the Mother of Esau:**
+
+   \`\`\`
+   (<m> mother Esau) -> <m>
+   \`\`\`
+   
+   - **Explanation:** Retrieves \`<m>\`, the mother of Esau.
+
+3. **Identifying Siblings:**
+
+   \`\`\`
+   (<m> mother <c>) (<f> father_o <c>) (<m> mother <c2>) (<f> father <c2>) -> <c>,<c2>
+   \`\`\`
+   
+   - **Explanation:** Finds \`<c>\` and \`<c2>\` who are siblings, sharing the same mother \`<m>\` and father \`<f>\`.
+
+**Guidelines:**
+
+- When constructing or interpreting Datalog queries, always adhere to this notation.
+- Ensure clarity by maintaining consistent use of variables and constants.
+- Use this format to express complex queries by combining multiple triplets and specifying the desired output.
+-------------------------------------------------------------------------------
+**Schema of the Knowledge Base**
+
+The following predicates are available:
+
+${schemaDescription}
+---
+
+**Additional Guidance**
+
+When constructing queries:
+
+- **Ensure Constraints are Met**: Always use the allowed values for predicate objects when constraints are specified.
+- **Use Consistent Naming**: Be consistent with variable names to avoid confusion.
+- **Check Validity**: Verify that each triplet adheres to the schema to prevent errors.
+
+**Benefits of Including the Schema**
+
+- **Clarity**: Users clearly understand how to use each predicate and what values are permissible.
+- **Error Reduction**: Minimizes the risk of constructing invalid queries that the system cannot process.
+- **Ease of Use**: Users can reference the schema as a guide while formulating their queries.
+-----------------------------------------------------------------------------------------------------
+If you understand what the user wants, respond with the query inside triple quotes. If you don't, ask for clarifications.
+`;
+}
+
+function queryExtractor(s: string): string | null {
+  let lines= s.split('\n');
+  let query = null;
+  let parsing = false;
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    if(!parsing && line.startsWith('```')) {
+      query = '';
+      parsing = true;
+    } else if(parsing) {
+      if(line.startsWith('```')) {
+        parsing = false;
+      } else {
+        query += line + '\n';
+      }
+    }
+  }
+  query = query?.trim();
+  if (!query) {
+    return null;
+  } else {
+    if(query[query.length - 1] === ';') query = query.substring(0, query.length - 2);
+    return query;
+  }
+}
+
+function parseAndRunQuery(input: string) {
+  const reteParse = parseRete(input);
+  if('specs' in reteParse) {
+    for (const {lhs, variables} of reteParse.specs) {
+      console.log(`Running: (${lhs.map(c => c.toString()).join(' ')}) -> ${(variables as string[]).map(v => '<' + v + '>').join(', ')})`);
+      const stringToStringMaps = rete.query(lhs, variables!);
+      for (let i = 0; i < stringToStringMaps.length; i++){
+        const stringToStringMap = stringToStringMaps[i];
+        let entries = Object.entries(stringToStringMap);
+        for (const [key, value] of entries) {
+          console.log(`${i}||${key}:${value}`);
+        }
+      }
+    }
+  } else {
+    let parseError = reteParse as ParseError;
+    console.log(parseError.error);
+  }
+}
+
+function createSchemaDescription() {
+  let schemaDescr = '';
+  for (let i = 0; i < Object.entries(patternsForAttributes).length; i++){
+    const [attribute, patterns] = (Object.entries(patternsForAttributes))[i];
+    let constraints: string;
+    if(patterns.length === 1 && !patterns[0].id && !patterns[0].val) {
+      constraints = `Unconstrained. ${patterns[0].description || ''}`;
+    } else {
+      constraints = '\n';
+      if(patterns[0].id) {
+        constraints += 'The subject can take values: ' + patterns.map(({id, description}) => id + (description ? ` [_ ${attribute} _ meaning: ${description}]` : '')).join(',');
+      } else {
+        constraints += 'The object can take values: ' + patterns.map(({val, description}) => val + (description ? ` [_ ${attribute} _ meaning: ${description}]` : '')).join(',');
+      }
+    }
+    const attributeDescription = `${i + 1}. **\`${attribute}\`**: ${constraints}
+ 
+`;
+    schemaDescr += attributeDescription;
+  }
+  return schemaDescr;
+}
+
+function interactiveClear() {
+  openAiState.contextLength = 0;
+}
+
+async function interactiveChat(prompt: string) {
+  if(!openaiapikeyExists) {
+    console.log('OPENAI_API_KEY not found. OpenAI integration has been disabled');
+    return;
+  }
+  if (!openai) {
+    let b = await confirm({message: 'Do you want to start a chat session? This will incur costs against your OpenAI credits.'});
+    if(!b) {
+      return;
+    }
+    openai = new OpenAI();
+  }
+  const schemaDescription = createSchemaDescription();
+  console.log(schemaDescription);
+  let response = await getOpenAiResponse(createSystemPrompt(schemaDescription), prompt, openAiState.contextLength);
+  // console.log('Response', response);
+  console.log(response.content);
+  let query = response.content && queryExtractor(response.content);
+  if (query) {
+    let b = await confirm({message: 'Run?'});
+    if (b) {
+      parseAndRunQuery('(' + query + ')');
+    }
+  }
+  openAiState.contextLength++;
+}
+
 async function interactive() {
-  console.log('Use "quit", "exit" or "bye" to exit');
-  let contextLength = 0;
+  console.log('Use "quit", "exit" or "bye" to exit, "help" for a description of available commands.');
   do {
     try {
-      const answer = await input({message: '>'});
+      const answer = await input({message: (openAiState.contextLength ? `[${openAiState.contextLength}]` : '') + '>'});
+      if(!answer.trim()) {
+        console.log(`It seems like your message was empty. Could you please provide the command, Rete-next clauses or English queries you would like assistance with?`);
+        continue;
+      }
       if (answer.toLowerCase() === 'bye' || answer.toLowerCase() === 'exit' || answer.toLowerCase() === 'quit') {
-        console.log('Bye to you, too');
+        console.log('Have a nice day');
         break;
       }
-      if(answer.toLowerCase().startsWith('retract')) {
+      if(answer.toLowerCase().startsWith('help')) {
+        interactiveHelp(answer.substring(4));
+      } else if(answer.toLowerCase().startsWith('retract')) {
         interactiveRetract(answer.substring(7));
+      } else if(answer.toLowerCase().startsWith('run')) {
+        interactiveRun(answer.substring(3));
+      } else if(answer.toLowerCase() === 'clear') {
+        interactiveClear();
+      } else {
+        await interactiveChat(answer);
       }
     } catch (e) {
       console.error(e);
     }
   } while (true);
+}
+
+readInputInterpretDirectivesAndParseAndExecute(fileContents);
+
+if (nonDeterministicFixpointPossible) {
+  console.log('Non-deterministic fixpoint cannot be ruled out');
 }
 
 let currentStratum = 0;

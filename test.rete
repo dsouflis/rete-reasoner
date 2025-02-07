@@ -1,6 +1,6 @@
-#schema _ father _
-#schema _ mother _
-#schema _ husband _
+#schema _ father _ (_ is the father of _)
+#schema _ mother _ (_ is the mother of _)
+#schema _ husband _ (_ is the husband of _)
 (!
  (Adam father Cain)
  (Adam father Abel)

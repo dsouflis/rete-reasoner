@@ -156,12 +156,32 @@ No schema pattern matches condition (<species> fly-prepare itcan)
 ```
 
 ## Interactive operation
-One can request an interactive shell after the execution of the file.
+One can request an interactive shell after the execution of the file. The commands supported are:
 
-The only command supported yet is "retract" with three arguments, as in:
+```
+Commands
+ quit, exit, bye               Exit
+ retract [str] [str] [str]     Retract axiomatic justification for WME ([str] [str] [str])
+ run [clauses]                 Run the clauses provided
+ clear                         Reset the chat and start over
+ [Prompt to chatbot]           Chat with ChatGPT
+```
+
+### Retract
+"Retract" takes three arguments, as in:
 
 ```
 √ > retract Sarah mother Isaac
 ```
 Only WMEs with an axiomatic justifications can be specified. This retracts the axiomatic justification for the
-corresponding WME. If no other justification exists, the WME is removed from the working memory. 
+corresponding WME. If no other justification exists, the WME is removed from the working memory, and a new stable state
+of the knowledge base is computed. 
+
+### Run
+"Run" is straightforward. It executes the clauses provided and a new stable state of the knowledge base is computed. 
+
+### Chatting with the knowledge base
+One can chat with the knowledge base, with the prerequisite that the OPENAI_API_KEY env var must be set, and the
+schema has been adequately been documented using `#schema` directives. Once can formulate queries for information and
+the chatbot will ask for clarifications or propose Rete-next queries. The user is given the option to run them or not.
+One can clear the chat with the "clear" command and start a new conversation.

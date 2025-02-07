@@ -1,9 +1,9 @@
-#schema _ is-a _
-#schema _ fly can
-#schema _ fly cannot
+#schema _ is-a _ "Species _ is-a instance of genus _"
+#schema _ fly can "_ can fly"
+#schema _ fly cannot "_ cannot fly"
 #schema _ fly-prepare can
-#schema _ hunting-possible-by shooting
-#schema _ hunting-possible-by chasing
+#schema _ hunting-possible-by shooting "It is possible to hunt _ by shooting"
+#schema _ hunting-possible-by chasing "It is possible to hunt _ by chasing"
 (!  (duck is-a bird)
     (robbin is-a bird)
     (dodo is-a bird)
