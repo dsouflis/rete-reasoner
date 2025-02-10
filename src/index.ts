@@ -398,6 +398,11 @@ function runQueries() {
     for (const query of queries) {
       const {lhs, variables} = query;
       const stringToStringMaps = rete.query(lhs, variables);
+      if(stringToStringMaps.length) {
+        console.log('Yes.');
+      } else {
+        console.log('No.');
+      }
       for (let i = 0; i < stringToStringMaps.length; i++) {
         const stringToStringMap = stringToStringMaps[i];
         let entries = Object.entries(stringToStringMap);
@@ -609,7 +614,7 @@ function createSystemPrompt(schemaDescription: string) {
   
 - **Query Formation:** Combine multiple triplets to set conditions or express relationships. Use \`->\` to denote the result or output of the query.
   
-- **Output Variables:** After the \`->\`, list the variables to output, separated by commas without additional parentheses or angle brackets.
+- **Output Variables:** After the \`->\`, list the variables to output, separated by commas without additional parentheses or angle brackets. If there are no variables, i.e. it is a yes/no question, just finish with the arrow (\`->\`).
 
 **Examples for sample predicates \`mother\`, \`father\`:**
 
@@ -700,6 +705,11 @@ function parseAndRunQuery(input: string) {
     for (const {lhs, variables} of reteParse.specs) {
       console.log(`Running: (${lhs.map(c => c.toString()).join(' ')}) -> ${(variables as string[]).map(v => '<' + v + '>').join(', ')})`);
       const stringToStringMaps = rete.query(lhs, variables!);
+      if(stringToStringMaps.length) {
+        console.log('Yes.');
+      } else {
+        console.log('No.');
+      }
       for (let i = 0; i < stringToStringMaps.length; i++){
         const stringToStringMap = stringToStringMaps[i];
         let entries = Object.entries(stringToStringMap);
@@ -754,7 +764,7 @@ async function interactiveChat(prompt: string) {
     openai = new OpenAI();
   }
   const schemaDescription = createSchemaDescription();
-  console.log(schemaDescription);
+  // console.log(schemaDescription);
   let response = await getOpenAiResponse(createSystemPrompt(schemaDescription), prompt, openAiState.contextLength);
   // console.log('Response', response);
   console.log(response.content);
