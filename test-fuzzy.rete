@@ -1,0 +1,12 @@
+#schemacheck on
+#fuzzy kind excellent-poor excellent:sigmoid 4 0.7, poor:sigmoid -4 0.3
+#fuzzy var food excellent-poor
+#fuzzy var service excellent-poor
+#fuzzy system min-max
+#fuzzy attr tip
+
+((<x> food excellent)(<x> service excellent) -> "large tip" (! (<x> tip 100)))
+((<x> food excellent)(<x> service poor) -> "small tip" (! (<x> tip 100)))
+((<x> food excellent)(<x> service poor) -> "medium tip" (! (<x> tip 100)))
+
+(! (B1 food 0.3) (B1 service 0.9))

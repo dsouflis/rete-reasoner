@@ -12,6 +12,8 @@ import {
   evalVariablesInToken,
   Field,
   FieldType,
+  FuzzySystem,
+  FuzzyVariable, FuzzyWME,
   GenericCondition,
   ProductionNode,
   Rete,
@@ -58,11 +60,74 @@ type PatternsForAttribute = {
   description: undefined | string,
 }
 
+interface FuzzyValDefinition {
+  name: string,
+  a: number,
+  c: number,
+}
+
+interface FuzzyVariableKind {
+  name: string,
+  definitions: FuzzyValDefinition[],
+}
+
+function sigmoid(a: number, c: number, val: number) {
+  return 1 / (1 + Math.exp(-a * (val - c)));
+}
+
+class DeclaredFuzzyVariable implements FuzzyVariable {
+  constructor(public name: string, public fuzzyVariableKind: FuzzyVariableKind) {
+  }
+
+  getName(): string {
+    return this.name;
+  }
+
+  computeMembershipValueForFuzzyValue(fuzzyValue: string, val: number): number {
+    const fuzzyValueDefinition = this.getFuzzyValue(fuzzyValue);
+    if(fuzzyValueDefinition) {
+      return sigmoid(fuzzyValueDefinition.a, fuzzyValueDefinition.c, val);
+    }
+    return 0;
+  }
+
+  computeValueForFuzzyMembershipValue(fuzzyValue: string, μ: number): number {
+    return 0;
+  }
+
+  isFuzzyValue(fuzzyValue: string): boolean {
+    return !!this.getFuzzyValue(fuzzyValue);
+  }
+
+  private getFuzzyValue(fuzzyValue: string) {
+    return this.fuzzyVariableKind.definitions.find(x => x.name === fuzzyValue);
+  }
+}
+
 interface Options extends CommandLineOptions{
   file: string,
   strategy: string,
   schemaCheck: boolean,
   interactive: boolean,
+}
+
+class MinMaxFuzzySystem implements FuzzySystem {
+  computeConjunction(...μs: number[]): number {
+    return Math.min(...μs);
+  }
+
+  computeDisjunction(...μs: number[]): number {
+    return Math.max(...μs);
+  }
+}
+class MultiplicativeFuzzySystem implements FuzzySystem {
+  computeConjunction(...μs: number[]): number {
+    return μs.reduce((x,y) => x * y, 1);
+  }
+
+  computeDisjunction(...μs: number[]): number {
+    return 0; //should be x0 + x1 + ... xn - x0*x1*x[n-1] - ... + ... - ... up to x0*x1*xn
+  }
 }
 
 const openaiapikeyExists = !!process.env.OPENAI_API_KEY;
@@ -95,6 +160,9 @@ let justifications: WMEJustification[] = [];
 let nonDeterministicFixpointPossible = false;
 const patternsForAttributes: {[attr:string]:PatternsForAttribute[]} = {};
 let schemaCheck = options.schemaCheck;
+let fuzzySystem: FuzzySystem;
+const fuzzyAttrs: string[] = [];
+const fuzzyVariableKinds: FuzzyVariableKind[] = [];
 
 function tryMatchPatternInWME(wme: WME, patternsForAttribute: PatternsForAttribute[]) {
   for (const patternForAttribute of patternsForAttribute) {
@@ -137,8 +205,11 @@ function tryMatchPatternInCondition(cond: Condition, patternsForAttribute: Patte
 
 function checkWMEAgainstSchema(wme: WME) {
   const attr = wme.fields[1];
+  if(fuzzyAttrs.includes(attr)) {
+    return;
+  }
   const patternsForAttribute = patternsForAttributes[attr];
-  if (!patternsForAttribute) {
+  if (!patternsForAttribute ) {
     console.warn(`No schema registered for attribute ${attr}`);
   } else {
     const ok = tryMatchPatternInWME(wme, patternsForAttribute);
@@ -152,6 +223,9 @@ function checkConditionsAgainstSchema(lhs: GenericCondition[]) {
   for (const cond of lhs) {
     if(cond instanceof Condition && cond.attrs[1] instanceof Field && (cond.attrs[1] as Field).type === FieldType.Const) {
       const attr = (cond.attrs[1] as Field).v;
+      if(fuzzyAttrs.includes(attr)) {
+        return;
+      }
       const patternsForAttribute = patternsForAttributes[attr];
       if(!patternsForAttribute) {
         console.warn(`No schema registered for attribute ${attr}`);
@@ -217,6 +291,7 @@ function parseAndExecute(input: string) {
 const stratumDirective = '#stratum';
 const schemaCheckDirective = '#schemacheck';
 const schemaDirective = '#schema';
+const fuzzyDirective = '#fuzzy';
 
 function executeDirective(dir: string) {
   if(dir.startsWith(stratumDirective)) {
@@ -247,6 +322,70 @@ function executeDirective(dir: string) {
       val: val === '_' ? undefined : val,
       description: description || undefined,
     });
+  } else if(dir.startsWith(fuzzyDirective)) {
+    fuzzyDirectiveHandling(dir.substring(fuzzyDirective.length).trim());
+  }
+}
+
+function fuzzyDirectiveHandling(prompt: string) {
+  if(prompt.toLowerCase().startsWith('system')) {
+    const s = prompt.substring(6).trim();
+    if(s === 'min-max') {
+      fuzzySystem = new MinMaxFuzzySystem();
+    } else if(s === 'multiplicative') {
+      fuzzySystem = new MultiplicativeFuzzySystem();
+    } else {
+      console.warn(`Unknown fuzzy system ${s}`);
+    }
+  } else if(prompt.toLowerCase().startsWith('kind')) {
+    const defn = prompt.toLowerCase().substring('kind'.length).trim();
+    const fistSpace = defn.indexOf(' ');
+    if(fistSpace < 0) {
+      console.error(`Malformed fuzzy kind command ${prompt}`)
+      return;
+    }
+    const name = defn.substring(0, fistSpace).trim();
+    const vals = defn.substring(fistSpace).trim();
+    const valueDefinitions = vals.split(',').map(s => s.trim());
+    const definitions: FuzzyValDefinition[] = [];
+    for (const valueDefinition of valueDefinitions) {
+      const [name, def] = valueDefinition.split(':').map(s => s.trim());
+      const [fnc, aS, cS] = def.split(' ').map(s => s.trim());
+      if(fnc !== 'sigmoid') {
+        console.error(`Only 'sigmoid' membership function can be currently used. Invalid function: ${fnc}`);
+        return;
+      }
+      const a = parseFloat(aS);
+      const c = parseFloat(cS);
+      if(Number.isNaN(a) || Number.isNaN(c)) {
+        console.error(`Invalid 'a' and 'c' values for sigmoid function: ${a}, ${c}`);
+        return;
+      }
+      definitions.push({
+        name,
+        a,
+        c
+      });
+    }
+    fuzzyVariableKinds.push({
+      name,
+      definitions,
+    });
+  } else if(prompt.toLowerCase().startsWith('var')) {
+    const varnamekind = prompt.toLowerCase().substring('var'.length).trim();
+    const [varname, kind] = varnamekind.split(' ');
+    const found = fuzzyVariableKinds.find(x => x.name === kind);
+    if(!found) {
+      console.error(`Undeclared fuzzy variable kind ${kind}`)
+      return;
+    }
+    const declaredFuzzyVariable = new DeclaredFuzzyVariable(varname, found);
+    rete.addFuzzyVariable(declaredFuzzyVariable);
+  } else if(prompt.toLowerCase().startsWith('attr')) {
+    const val = prompt.toLowerCase().substring('attr'.length).trim();
+    fuzzyAttrs.push(val);
+  } else {
+    console.error(`Malformed fuzzy command ${prompt}`)
   }
 }
 
@@ -327,6 +466,14 @@ function findConflictSet() {
   return conflicts;
 }
 
+function tokenToMu(token: Token): number | undefined {
+  const fuzzyWMEs = token.toArray().filter(x => x instanceof FuzzyWME);
+  let mu: number | undefined = fuzzyWMEs.length && fuzzySystem ?
+    fuzzySystem.computeConjunction(...fuzzyWMEs.flatMap(w => ((w as FuzzyWME).μ))) :
+    undefined;
+  return mu;
+}
+
 function run() {
   do {
     console.log(`Cycle ${cycle}`);
@@ -367,8 +514,8 @@ function run() {
           production.locationsOfAllVariablesInConditions,
           token
         );
-        const wmes = rete.addWMEsFromConditions(conflictItem.productionSpec.rhsAssert, variablesInToken);
-        const [wmesAdded, wmesExisting] = wmes;
+        let mu: number | undefined = tokenToMu(token);
+        const [wmesAdded, wmesExisting] = rete.addWMEsFromConditions(conflictItem.productionSpec.rhsAssert, variablesInToken, mu);
         for (const wme of wmesAdded) {
           justifications.push({
             wme,
@@ -384,7 +531,18 @@ function run() {
             wmeJustification.justifications.push({
               prod: production.rhs,
               token,
-            })
+            });
+            if(fuzzySystem && wme instanceof FuzzyWME) {
+              const mus = wmeJustification.justifications
+                .filter(jj => 'prod' in jj)
+                .map(jj => jj as ProductionJustification)
+                .map(jj => tokenToMu(jj.token))
+                .filter(n => n !== undefined)
+                .map(n => n as number)
+              ;
+              const cumulativeMu = fuzzySystem.computeDisjunction(...mus);
+              wme.μ = cumulativeMu; //todo propagate to dependent WMEs
+            }
           }
         }
       }
@@ -443,6 +601,10 @@ function interactiveHelp(prompt: string) {
     console.log(' retract [str] [str] [str]     Retract axiomatic justification for WME ([str] [str] [str])');
   }
 
+  function showExplain() {
+    console.log(' explain [str] [str] [str]     Explain the justification for WME ([str] [str] [str])');
+  }
+
   function showRun() {
     console.log(' run [clauses]                 Run the clauses provided');
   }
@@ -463,6 +625,7 @@ function interactiveHelp(prompt: string) {
     console.log('Commands');
     showQuit();
     showRetract();
+    showExplain();
     showRun();
     showClear();
     showChat();
@@ -481,6 +644,10 @@ function interactiveHelp(prompt: string) {
     }
     case 'retract': {
       showRetract();
+      break;
+    }
+    case 'explain': {
+      showExplain();
       break;
     }
     case 'run': {
@@ -518,6 +685,82 @@ function interactiveRetract(prompt: string) {
     }
   } else {
     console.error(`Malformed retract command ${prompt}`)
+  }
+}
+
+function explainWME(found: WME, indentation: string, visited: WME[]) {
+  if(visited.includes(found)) {
+    let ret = (indentation) + '(*)\n';
+    return ret;
+  }
+  const foundJustification = justifications.find(j => j.wme === found);
+  if (!foundJustification) {
+    console.warn(`No justification found for (${found.toString()} )`);
+    return '';
+  } else {
+    let ret = '';
+    const length = foundJustification.justifications.length;
+    for (let i = 0; i < length; i++){
+      const linePrefix = (indentation) + ((i < length - 1) ? '├' : '└');
+      const jj = foundJustification.justifications[i];
+      if ('axiomatic' in jj) {
+        const line = linePrefix + '[Axiomatic]\n';
+        ret += line;
+      } else {
+        const newVisited = [...visited, found];
+        ret += linePrefix + `[${jj.prod}]\n`;
+        const lengthInner = jj.token.toArray().length;
+        for (let iInner = 0; iInner < lengthInner; iInner++){
+          const linePrefixInner = (indentation) + ((iInner < lengthInner - 1) ? '  ├' : '  └');
+          const wme = jj.token.toArray()[iInner];
+          ret += linePrefixInner + wme.toString() + '\n';
+          const s = explainWME(wme, indentation + '    ', newVisited);
+          ret += s;
+        }
+      }
+    }
+    return ret;
+  }
+}
+
+function beautifyExplanation(s: string) {
+  const lines = s.split('\n');
+  let lineLocations: number[] = [];
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    const chars = line.split('');
+    for (let i1 = 0; i1 < chars.length; i1++){
+      const char = chars[i1];
+      if(char === '└') {
+        lineLocations.push(i1);
+      } else if(lineLocations.includes(i1)) {
+        if (char === ' ') {
+          chars[i1] = '│';
+        } else if(char !== '├') {
+          lineLocations = lineLocations.filter(x => x !== i1);
+          break;
+        }
+      }
+    }
+    lines[i] = chars.join('');
+  }
+  return lines.join('\n');
+}
+
+function interactiveExplain(prompt: string) {
+  const strings = prompt.trim().split(' ');
+  if(strings.length === 3) {
+    const found = rete.working_memory.find(w => w.fields[0] === strings[0] && w.fields[1] === strings[1] && w.fields[2] === strings[2]);
+    if (!found) {
+      console.warn(`No WME found matching (${strings[0]} ${strings[1]} ${strings[2]} )`);
+    } else {
+      console.log(found.toString());
+      const s = explainWME(found, '', []);
+      const explanation = beautifyExplanation(s);
+      console.log(explanation);
+    }
+  } else {
+    console.error(`Malformed explain command ${prompt}`)
   }
 }
 
@@ -782,8 +1025,8 @@ async function interactive() {
   console.log('Use "quit", "exit" or "bye" to exit, "help" for a description of available commands.');
   do {
     try {
-      const answer = await input({message: (openAiState.contextLength ? `[${openAiState.contextLength}]` : '') + '>'});
-      if(!answer.trim()) {
+      const answer = (await input({message: (openAiState.contextLength ? `[${openAiState.contextLength}]` : '') + '>'})).trim();
+      if(!answer) {
         console.log(`It seems like your message was empty. Could you please provide the command, Rete-next clauses or English queries you would like assistance with?`);
         continue;
       }
@@ -795,6 +1038,8 @@ async function interactive() {
         interactiveHelp(answer.substring(4));
       } else if(answer.toLowerCase().startsWith('retract')) {
         interactiveRetract(answer.substring(7));
+      } else if(answer.toLowerCase().startsWith('explain')) {
+        interactiveExplain(answer.substring(7));
       } else if(answer.toLowerCase().startsWith('run')) {
         interactiveRun(answer.substring(3));
       } else if(answer.toLowerCase() === 'clear') {

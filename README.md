@@ -185,3 +185,26 @@ One can chat with the knowledge base, with the prerequisite that the OPENAI_API_
 schema has been adequately been documented using `#schema` directives. Once can formulate queries for information and
 the chatbot will ask for clarifications or propose Rete-next queries. The user is given the option to run them or not.
 One can clear the chat with the "clear" command and start a new conversation.
+
+### Fuzzy ....
+
+```
+ #fuzzy [configuration]         Configure various aspects of the fuzzy operations
+
+ Configuration elements:
+ kind [variablekind] [fuzzy-value]:sigmoid [a] [c], [...more...]
+ Purpose: Define a new kind of fuzzy variable. Currently, only the sigmoid function is supported
+ Example: #fuzzy kind excellent-poor excellent:sigmoid 4 0.7, poor:sigmoid -4, 0.3
+
+ var [variablename] [variablekind]
+ Purpose: Define a fuzzy variable that is of a previously defined kind
+ Example: #fuzzy var food excellent-poor
+
+ system min-max|multiplicative
+ Purpose: Configure what fuzzy system will be used. Options are "min-max" and "multiplicative"
+ Example: #fuzzy system min-max
+
+ attr [attibute]
+ Purpose: Declare attributes of asserted WMEs whose values should be multiplied by resulting membership value
+ Example: #fuzzy attr tip
+```
