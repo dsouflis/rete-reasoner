@@ -13,7 +13,8 @@ import {
   Field,
   FieldType,
   FuzzySystem,
-  FuzzyVariable, FuzzyWME,
+  FuzzyVariable,
+  FuzzyWME,
   GenericCondition,
   ProductionNode,
   Rete,
@@ -75,6 +76,10 @@ function sigmoid(a: number, c: number, val: number) {
   return 1 / (1 + Math.exp(-a * (val - c)));
 }
 
+function inverse_sigmoid(a: number, c: number, y: number) {
+  return c - (Math.log(1/y - 1))/a;
+}
+
 class DeclaredFuzzyVariable implements FuzzyVariable {
   constructor(public name: string, public fuzzyVariableKind: FuzzyVariableKind) {
   }
@@ -92,6 +97,10 @@ class DeclaredFuzzyVariable implements FuzzyVariable {
   }
 
   computeValueForFuzzyMembershipValue(fuzzyValue: string, μ: number): number {
+    const fuzzyValueDefinition = this.getFuzzyValue(fuzzyValue);
+    if(fuzzyValueDefinition) {
+      return inverse_sigmoid(fuzzyValueDefinition.a, fuzzyValueDefinition.c, μ);
+    }
     return 0;
   }
 
@@ -163,7 +172,7 @@ let nonDeterministicFixpointPossible = false;
 const patternsForAttributes: {[attr:string]:PatternsForAttribute[]} = {};
 let schemaCheck = options.schemaCheck;
 let fuzzySystem: FuzzySystem;
-const fuzzyAttrs: string[] = [];
+const defuzzificationAttrs: string[] = [];
 const fuzzyVariableKinds: FuzzyVariableKind[] = [];
 
 function tryMatchPatternInWME(wme: WME, patternsForAttribute: PatternsForAttribute[]) {
@@ -207,7 +216,7 @@ function tryMatchPatternInCondition(cond: Condition, patternsForAttribute: Patte
 
 function checkWMEAgainstSchema(wme: WME) {
   const attr = wme.fields[1];
-  if(fuzzyAttrs.includes(attr)) {
+  if(rete.getFuzzyVariable(attr)) {
     return;
   }
   const patternsForAttribute = patternsForAttributes[attr];
@@ -225,7 +234,7 @@ function checkConditionsAgainstSchema(lhs: GenericCondition[]) {
   for (const cond of lhs) {
     if(cond instanceof Condition && cond.attrs[1] instanceof Field && (cond.attrs[1] as Field).type === FieldType.Const) {
       const attr = (cond.attrs[1] as Field).v;
-      if(fuzzyAttrs.includes(attr)) {
+      if(rete.getFuzzyVariable(attr)) {
         return;
       }
       const patternsForAttribute = patternsForAttributes[attr];
@@ -383,9 +392,14 @@ function fuzzyDirectiveHandling(prompt: string) {
     }
     const declaredFuzzyVariable = new DeclaredFuzzyVariable(varname, found);
     rete.addFuzzyVariable(declaredFuzzyVariable);
-  } else if(prompt.toLowerCase().startsWith('attr')) {
-    const val = prompt.toLowerCase().substring('attr'.length).trim();
-    fuzzyAttrs.push(val);
+  } else if(prompt.toLowerCase().startsWith('defuzzify')) {
+    const attr = prompt.toLowerCase().substring('defuzzify'.length).trim();
+    if(!rete.getFuzzyVariable(attr)) {
+      console.error(`Undeclared fuzzy variable ${attr}`);
+    }
+    if(!defuzzificationAttrs.includes(attr)) {
+      defuzzificationAttrs.push(attr);
+    }
   } else {
     console.error(`Malformed fuzzy command ${prompt}`)
   }
@@ -406,6 +420,7 @@ function readInputInterpretDirectivesAndParseAndExecute(input) {
       clauses += line + '\n';
     }
   }
+  clauses = clauses.trim();
   if(clauses) {
     parseAndExecute(clauses);
   }
@@ -477,7 +492,6 @@ function tokenToMu(token: Token): number | undefined {
 }
 
 function propagateMu(wme: FuzzyWME) {
-  //todo propagate to dependent WMEs
   function propagateMuAux(remaining: FuzzyWME[], visited: FuzzyWME[]) {
     const [wme, ...rest] = remaining;
     if(visited.includes(wme)) {
@@ -599,6 +613,45 @@ function runQueries() {
   }
 }
 
+function runDefuzzifies() {
+  for (const attr of defuzzificationAttrs) {
+    console.log(`Defuzzifying _ ${attr} _`);
+    const fuzzyVariable = rete.getFuzzyVariable(attr);
+    if(!fuzzyVariable) continue;
+    const wmes = rete.working_memory.filter(w => w instanceof FuzzyWME && w.fields[1] === attr).map(w => w as FuzzyWME);
+    if(wmes.length) {
+      const emptyGroupedWmes: {[id:string]: FuzzyWME[]} = {};
+      function addToGroup(acc: {[id:string]: FuzzyWME[]}, cur: FuzzyWME): {[id:string]: FuzzyWME[]} {
+        const id = cur.fields[0].toString();
+        if(id in acc) {
+          return {
+            ...acc,
+            [id]: [cur, ...acc[id]],
+          }
+        } else {
+          return {
+            ...acc,
+            [id]: [cur],
+          }
+        }
+      }
+      const groupedWmes = wmes.reduce(addToGroup, emptyGroupedWmes);
+      for (const id in groupedWmes) {
+        const wmes = groupedWmes[id];
+        let sum = 0;
+        for (const wme of wmes) {
+          const μ = wme.μ;
+          const fuzzyval = wme.fields[2].toString();
+          const numericValue = fuzzyVariable!.computeValueForFuzzyMembershipValue(fuzzyval, μ);
+          sum += numericValue;
+        }
+        const finalNumericValue = sum / wmes.length;
+        console.log(`(${id} ${attr} ${finalNumericValue})`);
+      }
+    }
+  }
+}
+
 function showKnowledgeBase() {
   if (justifications.length) {
     console.log(`The working memory consists of ${justifications.length} WMEs`);
@@ -709,6 +762,7 @@ function interactiveRetract(prompt: string) {
       }
       run();
       showKnowledgeBase();
+      runDefuzzifies();
     }
   } else {
     console.error(`Malformed retract command ${prompt}`)
@@ -1093,6 +1147,7 @@ let cycle = 1;
 run();
 runQueries();
 showKnowledgeBase();
+runDefuzzifies();
 
 if(options.interactive) {
   await interactive();

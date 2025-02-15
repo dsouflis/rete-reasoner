@@ -1,14 +1,17 @@
 #schemacheck on
 #fuzzy kind excellent-poor excellent:sigmoid 4 0.7, poor:sigmoid -4 0.3
+#fuzzy kind small-big big:sigmoid 4 0.7, small:sigmoid -4 0.3
 #fuzzy var food excellent-poor
 #fuzzy var service excellent-poor
+#fuzzy var tip small-big
 #fuzzy system multiplicative
-#fuzzy attr tip
 
-((<x> food excellent)(<x> service excellent) -> "excellent food and service" (! (<x> tip 1)))
-((<x> food poor)(<x> service poor) -> "poor food and service" (! (<x> tip 1)))
-((<x> food excellent)(<x> service poor) -> "excellent food but poor service" (! (<x> tip 1)))
+((<x> food excellent)(<x> service excellent) -> "excellent food and service" (! (<x> tip big)))
+((<x> food poor)(<x> service poor) -> "poor food and service" (! (<x> tip small)))
+((<x> food excellent)(<x> service poor) -> "excellent food but poor service" (! (<x> tip small)))
 
 (! (B1 food 0.3) (B1 service 0.9))
 (! (B2 food 0.3) (B2 service 0.7))
 (! (B3 food 0.7) (B3 service 0.3))
+
+#fuzzy defuzzify tip

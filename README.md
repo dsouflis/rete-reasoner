@@ -204,7 +204,7 @@ One can clear the chat with the "clear" command and start a new conversation.
  Purpose: Configure what fuzzy system will be used. Options are "min-max" and "multiplicative"
  Example: #fuzzy system min-max
 
- attr [attibute]
- Purpose: Declare attributes of asserted WMEs whose values should be multiplied by resulting membership value
- Example: #fuzzy attr tip
+ defuzzify [attibute]
+ Purpose: Defuzzify WMEs for [attribute]
+ Example: #defuzzify tip
 ```
