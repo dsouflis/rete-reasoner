@@ -126,7 +126,9 @@ class MultiplicativeFuzzySystem implements FuzzySystem {
   }
 
   computeDisjunction(...μs: number[]): number {
-    return 0; //should be x0 + x1 + ... xn - x0*x1*x[n-1] - ... + ... - ... up to x0*x1*xn
+    //x0 + x1 + ... xn - x0*x1*x[n-1] - ... + ... - ... up to x0*x1*xn
+    const sum = μs.reduce((x, y) => x + y, 0);
+    return sum - this.computeConjunction(...μs);
   }
 }
 
@@ -474,6 +476,39 @@ function tokenToMu(token: Token): number | undefined {
   return mu;
 }
 
+function propagateMu(wme: FuzzyWME) {
+  //todo propagate to dependent WMEs
+  function propagateMuAux(remaining: FuzzyWME[], visited: FuzzyWME[]) {
+    const [wme, ...rest] = remaining;
+    if(visited.includes(wme)) {
+      propagateMuAux(rest, visited);
+      return;
+    }
+    let wmeJustification = justifications.find(j => j.wme === wme);
+    if(!wmeJustification) {
+      console.warn(`No justification found for ${wme.toString()}`);
+      return;
+    }
+    const productionJustifications = wmeJustification.justifications
+      .filter(jj => 'prod' in jj)
+      .map(jj => jj as ProductionJustification);
+    const mus = productionJustifications
+      .map(jj => tokenToMu(jj.token))
+      .filter(n => n !== undefined)
+      .map(n => n as number)
+    ;
+    const cumulativeMu = fuzzySystem.computeDisjunction(...mus);
+    wme.μ = cumulativeMu;
+    const fuzzyWMES = productionJustifications
+      .flatMap(jj => jj.token.toArray()
+        .filter(w => w instanceof FuzzyWME)
+        .map(w => w as FuzzyWME)
+      );
+    rest.length && propagateMuAux(rest, [wme, ...visited]);
+  }
+  propagateMuAux([wme], []);
+}
+
 function run() {
   do {
     console.log(`Cycle ${cycle}`);
@@ -533,15 +568,7 @@ function run() {
               token,
             });
             if(fuzzySystem && wme instanceof FuzzyWME) {
-              const mus = wmeJustification.justifications
-                .filter(jj => 'prod' in jj)
-                .map(jj => jj as ProductionJustification)
-                .map(jj => tokenToMu(jj.token))
-                .filter(n => n !== undefined)
-                .map(n => n as number)
-              ;
-              const cumulativeMu = fuzzySystem.computeDisjunction(...mus);
-              wme.μ = cumulativeMu; //todo propagate to dependent WMEs
+              propagateMu(wme);
             }
           }
         }
