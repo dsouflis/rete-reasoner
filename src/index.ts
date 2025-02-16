@@ -121,6 +121,7 @@ interface Options extends CommandLineOptions{
   strategy: string,
   schemaCheck: boolean,
   interactive: boolean,
+  trace: boolean,
 }
 
 class MinMaxFuzzySystem implements FuzzySystem {
@@ -152,6 +153,7 @@ const optionDefinitions: OptionDefinition[] = [
   { name: 'strategy', alias: 's', type: String},
   { name: 'schema-check', alias: 'c', type: Boolean, defaultValue: false},
   { name: 'interactive', alias: 'i', type: Boolean, defaultValue: false},
+  { name: 'trace', alias: 't', type: Boolean, defaultValue: false},
 ];
 
 const options = commandLineArgs(optionDefinitions) as Options;
@@ -162,6 +164,7 @@ if(!options.file) {
   console.warn('  -s, --strategy       Conflict resolution strategy [optional]');
   console.warn('  -c, --schema-check   Enable schema check before reading file [optional]');
   console.warn('  -i, --interactive    Launch interactive session after running [optional]');
+  console.warn('  -t, --trace          Enable tracing [optional]');
   process.exit();
 }
 
@@ -273,7 +276,7 @@ function parseAndExecute(input: string) {
   for (const {lhs, rhs, rhsAssert, variables} of parsedProductions.specs) {
     if (!rhs && !rhsAssert && !variables) { //Assert
       let wmes = rete.addWMEsFromConditions(lhs);
-      console.log(`Added ${wmes[0].length} WME${wmes[0].length === 1 ? '' : 's'}`);
+      options.trace && console.log(`Added ${wmes[0].length} WME${wmes[0].length === 1 ? '' : 's'}`);
       for (const wme of wmes[0]) {
         justifications.push({wme, justifications: [{axiomatic: true}]});
         schemaCheck && checkWMEAgainstSchema(wme);
@@ -293,7 +296,7 @@ function parseAndExecute(input: string) {
       };
       productions.push(productionSpec);
       strata[stratumBeingRead].push(productionSpec);
-      console.log(`Added production: "${rhs}"`);
+      options.trace && console.log(`Added production: "${rhs}"`);
       if (schemaCheck) {
         checkConditionsAgainstSchema(lhs);
         rhsAssert && checkConditionsAgainstSchema(rhsAssert);
@@ -311,7 +314,7 @@ function executeDirective(dir: string) {
   if(dir.startsWith(stratumDirective)) {
     strata.push([]);
     stratumBeingRead++;
-    console.log(`Now reading stratum #${stratumBeingRead}`);
+    options.trace && console.log(`Now reading stratum #${stratumBeingRead}`);
   } else if(dir.startsWith(schemaCheckDirective)) {
     const s = dir.substring(schemaCheckDirective.length).trim();
     if(!['on', 'off'].includes(s)) {
@@ -453,14 +456,14 @@ const conflictResolutionStrategies: conflictResolutionStrategy[] = [
 let selectedConflictResolutionStrategy = conflictResolutionStrategies[0];
 
 if(!options.strategy) {
-  console.log(`No conflict resolution strategy specified, defaulting to: ${selectedConflictResolutionStrategy.name}`);
+  console.warn(`No conflict resolution strategy specified, defaulting to: ${selectedConflictResolutionStrategy.name}`);
 } else {
   const found = conflictResolutionStrategies.find(crs => crs.name.toLowerCase().startsWith(options.strategy.toLowerCase()));
   if(found) {
     selectedConflictResolutionStrategy = found;
     console.log(`Conflict resolution strategy specified: ${selectedConflictResolutionStrategy.name}`);
   } else {
-    console.log(`Conflict resolution strategy specified was not found, defaulting to: ${selectedConflictResolutionStrategy.name}`);
+    console.warn(`Conflict resolution strategy specified was not found, defaulting to: ${selectedConflictResolutionStrategy.name}`);
   }
 }
 
@@ -520,19 +523,19 @@ function propagateMu(wme: FuzzyWME) {
 
 function run() {
   do {
-    console.log(`Cycle ${cycle}`);
+    options.trace && (`Cycle ${cycle}`);
     const conflicts = findConflictSet();
     if (conflicts.length === 0) {
-      console.log('No more productions');
+      options.trace && console.log('No more productions');
       break;
     }
     const conflictItem = selectedConflictResolutionStrategy.fnc(conflicts);
     if (!conflictItem) {
-      console.log('No more productions');
+      options.trace && console.log('No more productions');
       break;
     }
     let production = conflictItem.productionSpec.production;
-    console.log(production.rhs);
+    options.trace && console.log(`Firing production "${production.rhs}"`);
     let [tokensToAdd, tokensToRemove] = production.willFire();
     for (const token of tokensToRemove) {
       const foundJustifications = justifications
@@ -545,7 +548,7 @@ function run() {
           .filter(jj => 'prod' in jj).map(jj => jj as ProductionJustification)
           .filter(jj => jj.prod === production.rhs && jj.token !== token);
         if(foundJustification.justifications.length === 0) {
-          console.log(`No justifications left, will be removed:`, foundJustification.wme.toString());
+          options.trace && console.log(`No justifications left, will be removed:`, foundJustification.wme.toString());
           rete.removeWME(foundJustification.wme);
         }
       }
@@ -569,6 +572,7 @@ function run() {
             }]
           })
         }
+        options.trace && wmesAdded.length && console.log('Added ', wmesAdded.map(w => w.toString()).join());
         for (const wme of wmesExisting) {
           let wmeJustification = justifications.find(j => j.wme === wme);
           if(wmeJustification) {
@@ -581,6 +585,7 @@ function run() {
             }
           }
         }
+        options.trace && wmesExisting.length && console.log('Added justifications for', wmesExisting.map(w => w.toString()).join());
         runDefuzzification();
       }
     }
@@ -590,7 +595,7 @@ function run() {
 
 function runQueries() {
   if (queries.length) {
-    console.log(`Running ${queries.length} ${queries.length === 1 ? 'query' : 'queries'}`);
+    options.trace && console.log(`Running ${queries.length} ${queries.length === 1 ? 'query' : 'queries'}`);
     for (const query of queries) {
       const {lhs, variables} = query;
       const stringToStringMaps = rete.query(lhs, variables);
@@ -634,6 +639,7 @@ function runDefuzzification() {
       const groupedWmes = wmes.reduce(addToGroup, emptyGroupedWmes);
       for (const id in groupedWmes) {
         const wmes = groupedWmes[id];
+        options.trace && console.log(`Defuzzifying ${wmes.map(w => w.toString()).join()}`);
         let sum = 0;
         for (const wme of wmes) {
           const μ = wme.μ;
@@ -656,6 +662,7 @@ function runDefuzzification() {
         }
         const added = rete.add(id, attr, finalNumericValue.toString());
         if (added) {
+          options.trace && console.log(`Added/replaced ${added.toString()}`);
           const wmeJustification: WMEJustification = {
             wme: added,
             justifications: [{
@@ -758,7 +765,7 @@ function interactiveHelp(prompt: string) {
       showClear();
       break;
     }
-    default: console.log(`Unknown command ${prompt}`);
+    default: console.warn(`Unknown command ${prompt}`);
   }
 }
 
@@ -1105,7 +1112,7 @@ function parseAndRunQuery(input: string) {
     }
   } else {
     let parseError = reteParse as ParseError;
-    console.log(parseError.error);
+    console.error(parseError.error);
   }
 }
 
@@ -1138,7 +1145,7 @@ function interactiveClear() {
 
 async function interactiveChat(prompt: string) {
   if(!openaiapikeyExists) {
-    console.log('OPENAI_API_KEY not found. OpenAI integration has been disabled');
+    console.warn('OPENAI_API_KEY not found. OpenAI integration has been disabled');
     return;
   }
   if (!openai) {
@@ -1151,8 +1158,7 @@ async function interactiveChat(prompt: string) {
   const schemaDescription = createSchemaDescription();
   // console.log(schemaDescription);
   let response = await getOpenAiResponse(createSystemPrompt(schemaDescription), prompt, openAiState.contextLength);
-  // console.log('Response', response);
-  console.log(response.content);
+  options.trace && console.log('Response', response.content);
   let query = response.content && queryExtractor(response.content);
   if (query) {
     let b = await confirm({message: 'Run?'});
