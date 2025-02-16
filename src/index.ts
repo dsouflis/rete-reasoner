@@ -28,10 +28,13 @@ type ProductionJustification = {
   token:Token,
   prod: string,
 };
+type DefuzzificationJustification = {
+  wmes: FuzzyWME[],
+};
 type AxiomaticJustification = {
   axiomatic: true,
 }
-type Justification = ProductionJustification | AxiomaticJustification;
+type Justification = ProductionJustification | DefuzzificationJustification | AxiomaticJustification;
 type ProductionSpec = {
   production: ProductionNode,
   rhsAssert?: GenericCondition[],
@@ -172,7 +175,6 @@ let nonDeterministicFixpointPossible = false;
 const patternsForAttributes: {[attr:string]:PatternsForAttribute[]} = {};
 let schemaCheck = options.schemaCheck;
 let fuzzySystem: FuzzySystem;
-const defuzzificationAttrs: string[] = [];
 const fuzzyVariableKinds: FuzzyVariableKind[] = [];
 
 function tryMatchPatternInWME(wme: WME, patternsForAttribute: PatternsForAttribute[]) {
@@ -392,14 +394,6 @@ function fuzzyDirectiveHandling(prompt: string) {
     }
     const declaredFuzzyVariable = new DeclaredFuzzyVariable(varname, found);
     rete.addFuzzyVariable(declaredFuzzyVariable);
-  } else if(prompt.toLowerCase().startsWith('defuzzify')) {
-    const attr = prompt.toLowerCase().substring('defuzzify'.length).trim();
-    if(!rete.getFuzzyVariable(attr)) {
-      console.error(`Undeclared fuzzy variable ${attr}`);
-    }
-    if(!defuzzificationAttrs.includes(attr)) {
-      defuzzificationAttrs.push(attr);
-    }
   } else {
     console.error(`Malformed fuzzy command ${prompt}`)
   }
@@ -426,7 +420,7 @@ function readInputInterpretDirectivesAndParseAndExecute(input) {
   }
 }
 
-let fileContents: string = await readFile(options.file, 'UTF8') as string;
+let fileContents: string = await readFile(options.file, 'UTF8' as any) as string; //Ugly hack to counteract bad typing
 
 function firstMatchConflictResolution(conflicts: ConflictItem[]): ConflictItem | undefined {
   return conflicts[0];
@@ -586,8 +580,10 @@ function run() {
             }
           }
         }
+        runDefuzzification();
       }
     }
+
   } while (cycle++ <= MAX_CYCLES);
 }
 
@@ -613,10 +609,10 @@ function runQueries() {
   }
 }
 
-function runDefuzzifies() {
-  for (const attr of defuzzificationAttrs) {
+function runDefuzzification() {
+  for (const fuzzyVariable of rete.fuzzyVariables) {
+    const attr = fuzzyVariable.getName();
     console.log(`Defuzzifying _ ${attr} _`);
-    const fuzzyVariable = rete.getFuzzyVariable(attr);
     if(!fuzzyVariable) continue;
     const wmes = rete.working_memory.filter(w => w instanceof FuzzyWME && w.fields[1] === attr).map(w => w as FuzzyWME);
     if(wmes.length) {
@@ -647,6 +643,23 @@ function runDefuzzifies() {
         }
         const finalNumericValue = sum / wmes.length;
         console.log(`(${id} ${attr} ${finalNumericValue})`);
+        const crispWmes = rete.working_memory.filter(w => w.fields[0] === id && w.fields[1] === attr && !Number.isNaN(parseFloat(w.fields[2])));
+        if(crispWmes.length > 1) {
+          console.warn(`More than one crisp WME found for fuzzy variable ${attr}`);
+        }
+        for (const crispWme of crispWmes) {
+          retractWMEandJustifications(crispWme);
+        }
+        const added = rete.add(id, attr, finalNumericValue.toString());
+        if (added) {
+          const wmeJustification: WMEJustification = {
+            wme: added,
+            justifications: [{
+              wmes,
+            }]
+          };
+          justifications.push(wmeJustification);
+        }
       }
     }
   }
@@ -659,8 +672,11 @@ function showKnowledgeBase() {
       let jStrings = [];
       for (const justification of j) {
         if ('prod' in justification) {
-          let productionJustification = justification as ProductionJustification;
+          const productionJustification = justification as ProductionJustification;
           jStrings.push(`[${productionJustification.prod}:${productionJustification.token.toString()}]`);
+        } else if('wmes' in justification) {
+          const defuzzificationJustification = justification as DefuzzificationJustification;
+          jStrings.push(`[Defuzzification of:${defuzzificationJustification.wmes.map(w => w.toString()).join()}]`);
         } else {
           jStrings.push('[Axiomatic]');
         }
@@ -742,27 +758,39 @@ function interactiveHelp(prompt: string) {
   }
 }
 
+function retractWMEandJustifications(found: WME) {
+  const foundJustification = justifications.find(j => j.wme === found);
+  if (!foundJustification) {
+    console.warn(`No justification found for (${found.toString()} )`);
+    return false;
+  } else {
+    const axiomaticJustification = foundJustification.justifications.find(jj => 'axiomatic' in jj);
+    if (!axiomaticJustification) {
+      console.warn(`WME does not have an axiomatic justification and cannot be retracted`);
+      return false;
+    }
+    foundJustification.justifications = foundJustification.justifications.filter(jj => jj !== axiomaticJustification);
+    if (foundJustification.justifications.length === 0) {
+      rete.removeWME(found);
+      justifications = justifications.filter(j => j !== foundJustification);
+    }
+    return true;
+  }
+}
+
 function interactiveRetract(prompt: string) {
   const strings = prompt.trim().split(' ');
   if(strings.length === 3) {
     const found = rete.working_memory.find(w => w.fields[0] === strings[0] && w.fields[1] === strings[1] && w.fields[2] === strings[2]);
-    const foundJustification = justifications.find(j => j.wme === found);
-    if(!found || !foundJustification) {
+    if (!found) {
       console.warn(`No WME found matching (${strings[0]} ${strings[1]} ${strings[2]} )`);
-    } else {
-      const axiomaticJustification = foundJustification.justifications.find(jj => 'axiomatic' in jj);
-      if(!axiomaticJustification) {
-        console.warn(`WME does not have an axiomatic justification and cannot be retracted`);
-        return;
-      }
-      foundJustification.justifications = foundJustification.justifications.filter(jj => jj !== axiomaticJustification);
-      if (foundJustification.justifications.length === 0) {
-        rete.removeWME(found);
-        justifications = justifications.filter(j => j !== foundJustification);
-      }
+      return;
+    }
+    if(retractWMEandJustifications(found)) {
+      runDefuzzification();
       run();
+      runDefuzzification();
       showKnowledgeBase();
-      runDefuzzifies();
     }
   } else {
     console.error(`Malformed retract command ${prompt}`)
@@ -776,8 +804,24 @@ function explainWME(found: WME, indentation: string, visited: WME[]) {
   }
   const foundJustification = justifications.find(j => j.wme === found);
   if (!foundJustification) {
-    console.warn(`No justification found for (${found.toString()} )`);
-    return '';
+    const isFuzzified = rete.getFuzzyVariable(found.fields[1])?.isFuzzyValue(found.fields[2]);
+    if(isFuzzified === undefined) {
+      console.warn(`No justification found for (${found.toString()} )`);
+      return '';
+    } else {
+      const crispWME = rete.working_memory.find(w =>
+        !(w instanceof FuzzyWME) &&
+        w.fields[0] === found.fields[0] &&
+        w.fields[1] === found.fields[1]
+      );
+      if(!crispWME) {
+        console.warn(`No crisp WME found for (${found.toString()} )`);
+        return '';
+      }
+      const linePrefix = (indentation) + '└';
+      const line = linePrefix + `[Fuzzification of: ${crispWME.toString()}]\n`;
+      return line;
+    }
   } else {
     let ret = '';
     const length = foundJustification.justifications.length;
@@ -787,13 +831,26 @@ function explainWME(found: WME, indentation: string, visited: WME[]) {
       if ('axiomatic' in jj) {
         const line = linePrefix + '[Axiomatic]\n';
         ret += line;
-      } else {
+      } else if('wmes' in jj) {
+        const defuzzificationJustification = jj as DefuzzificationJustification;
         const newVisited = [...visited, found];
-        ret += linePrefix + `[${jj.prod}]\n`;
-        const lengthInner = jj.token.toArray().length;
+        ret += linePrefix + `[Defuzzification of:]\n`;
+        const lengthInner = defuzzificationJustification.wmes.length;
         for (let iInner = 0; iInner < lengthInner; iInner++){
           const linePrefixInner = (indentation) + ((iInner < lengthInner - 1) ? '  ├' : '  └');
-          const wme = jj.token.toArray()[iInner];
+          const wme = defuzzificationJustification.wmes[iInner];
+          ret += linePrefixInner + wme.toString() + '\n';
+          const s = explainWME(wme, indentation + '    ', newVisited);
+          ret += s;
+        }
+      } else {
+        const pjj = jj as ProductionJustification;
+        const newVisited = [...visited, found];
+        ret += linePrefix + `[${pjj.prod}]\n`;
+        const lengthInner = pjj.token.toArray().length;
+        for (let iInner = 0; iInner < lengthInner; iInner++){
+          const linePrefixInner = (indentation) + ((iInner < lengthInner - 1) ? '  ├' : '  └');
+          const wme = pjj.token.toArray()[iInner];
           ret += linePrefixInner + wme.toString() + '\n';
           const s = explainWME(wme, indentation + '    ', newVisited);
           ret += s;
@@ -831,7 +888,21 @@ function beautifyExplanation(s: string) {
 function interactiveExplain(prompt: string) {
   const strings = prompt.trim().split(' ');
   if(strings.length === 3) {
-    const found = rete.working_memory.find(w => w.fields[0] === strings[0] && w.fields[1] === strings[1] && w.fields[2] === strings[2]);
+    const found = rete.working_memory.find(w => {
+      const firstTwoFieldsEqual = w.fields[0] === strings[0] && w.fields[1] === strings[1];
+      if(!firstTwoFieldsEqual) {
+        return false;
+      }
+      if(w.fields[2] === strings[2]) {
+        return true;
+      }
+      const possiblyNumberVal = parseFloat(w.fields[2]);
+      const possiblyNumberPromptVal = parseFloat(strings[2]);
+      if(Number.isNaN(possiblyNumberVal) || Number.isNaN(possiblyNumberPromptVal)) {
+        return false;
+      }
+      return Math.abs(possiblyNumberVal - possiblyNumberPromptVal) < 1e-6;
+    });
     if (!found) {
       console.warn(`No WME found matching (${strings[0]} ${strings[1]} ${strings[2]} )`);
     } else {
@@ -1144,10 +1215,10 @@ let currentStratum = 0;
 const MAX_CYCLES = 100;
 let cycle = 1;
 
+runDefuzzification();
 run();
 runQueries();
 showKnowledgeBase();
-runDefuzzifies();
 
 if(options.interactive) {
   await interactive();

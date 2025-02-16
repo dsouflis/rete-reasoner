@@ -13,5 +13,3 @@
 (! (B1 food 0.3) (B1 service 0.9))
 (! (B2 food 0.3) (B2 service 0.7))
 (! (B3 food 0.7) (B3 service 0.3))
-
-#fuzzy defuzzify tip

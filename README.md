@@ -203,8 +203,4 @@ One can clear the chat with the "clear" command and start a new conversation.
  system min-max|multiplicative
  Purpose: Configure what fuzzy system will be used. Options are "min-max" and "multiplicative"
  Example: #fuzzy system min-max
-
- defuzzify [attibute]
- Purpose: Defuzzify WMEs for [attribute]
- Example: #defuzzify tip
 ```
