@@ -4,11 +4,15 @@
 #fuzzy var food excellent-poor
 #fuzzy var service excellent-poor
 #fuzzy var tip small-big
+#fuzzy var valet-tip small-big
 #fuzzy system multiplicative
 
 ((<x> food excellent)(<x> service excellent) -> "excellent food and service" (! (<x> tip big)))
 ((<x> food poor)(<x> service poor) -> "poor food and service" (! (<x> tip small)))
 ((<x> food excellent)(<x> service poor) -> "excellent food but poor service" (! (<x> tip small)))
+
+((<x> tip big) -> "big tip" (! (<x> valet-tip small)))
+((<x> tip small) -> "small tip" (! (<x> valet-tip big)))
 
 (! (B1 food 0.3) (B1 service 0.9))
 (! (B2 food 0.3) (B2 service 0.7))

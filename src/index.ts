@@ -139,8 +139,9 @@ class MultiplicativeFuzzySystem implements FuzzySystem {
 
   computeDisjunction(...μs: number[]): number {
     //x0 + x1 + ... xn - x0*x1*x[n-1] - ... + ... - ... up to x0*x1*xn
-    const sum = μs.reduce((x, y) => x + y, 0);
-    return sum - this.computeConjunction(...μs);
+    const number_complements = μs.map(x => 1 - x);
+    const product = number_complements.reduce((x, y) => x * y, 1);
+    return 1 - product;
   }
 }
 
@@ -612,7 +613,6 @@ function runQueries() {
 function runDefuzzification() {
   for (const fuzzyVariable of rete.fuzzyVariables) {
     const attr = fuzzyVariable.getName();
-    console.log(`Defuzzifying _ ${attr} _`);
     if(!fuzzyVariable) continue;
     const wmes = rete.working_memory.filter(w => w instanceof FuzzyWME && w.fields[1] === attr).map(w => w as FuzzyWME);
     if(wmes.length) {
@@ -642,13 +642,17 @@ function runDefuzzification() {
           sum += numericValue;
         }
         const finalNumericValue = sum / wmes.length;
-        console.log(`(${id} ${attr} ${finalNumericValue})`);
         const crispWmes = rete.working_memory.filter(w => w.fields[0] === id && w.fields[1] === attr && !Number.isNaN(parseFloat(w.fields[2])));
+        let foundWithSameValue = false;
         if(crispWmes.length > 1) {
           console.warn(`More than one crisp WME found for fuzzy variable ${attr}`);
-        }
-        for (const crispWme of crispWmes) {
-          retractWMEandJustifications(crispWme);
+        } else if(crispWmes.length) {
+          for (const crispWme of crispWmes) {
+            const crispVal = parseFloat(crispWme.fields[2]);
+            if (Math.abs(crispVal - finalNumericValue) >= 1e-6) {
+              retractWMEandJustifications(crispWme);
+            }
+          }
         }
         const added = rete.add(id, attr, finalNumericValue.toString());
         if (added) {
@@ -758,18 +762,18 @@ function interactiveHelp(prompt: string) {
   }
 }
 
-function retractWMEandJustifications(found: WME) {
+function retractWMEandJustifications(found: WME): boolean {
   const foundJustification = justifications.find(j => j.wme === found);
   if (!foundJustification) {
     console.warn(`No justification found for (${found.toString()} )`);
     return false;
   } else {
-    const axiomaticJustification = foundJustification.justifications.find(jj => 'axiomatic' in jj);
-    if (!axiomaticJustification) {
-      console.warn(`WME does not have an axiomatic justification and cannot be retracted`);
+    const retractableJustification = foundJustification.justifications.find(jj => 'axiomatic' in jj || 'wmes' in jj);
+    if (!retractableJustification) {
+      console.warn(`WME does not have an axiomatic or defuzzification justification and cannot be retracted`);
       return false;
     }
-    foundJustification.justifications = foundJustification.justifications.filter(jj => jj !== axiomaticJustification);
+    foundJustification.justifications = foundJustification.justifications.filter(jj => jj !== retractableJustification);
     if (foundJustification.justifications.length === 0) {
       rete.removeWME(found);
       justifications = justifications.filter(j => j !== foundJustification);
@@ -888,21 +892,7 @@ function beautifyExplanation(s: string) {
 function interactiveExplain(prompt: string) {
   const strings = prompt.trim().split(' ');
   if(strings.length === 3) {
-    const found = rete.working_memory.find(w => {
-      const firstTwoFieldsEqual = w.fields[0] === strings[0] && w.fields[1] === strings[1];
-      if(!firstTwoFieldsEqual) {
-        return false;
-      }
-      if(w.fields[2] === strings[2]) {
-        return true;
-      }
-      const possiblyNumberVal = parseFloat(w.fields[2]);
-      const possiblyNumberPromptVal = parseFloat(strings[2]);
-      if(Number.isNaN(possiblyNumberVal) || Number.isNaN(possiblyNumberPromptVal)) {
-        return false;
-      }
-      return Math.abs(possiblyNumberVal - possiblyNumberPromptVal) < 1e-6;
-    });
+    const found = rete.findWME(strings[0], strings[1], strings[2]);
     if (!found) {
       console.warn(`No WME found matching (${strings[0]} ${strings[1]} ${strings[2]} )`);
     } else {
