@@ -523,7 +523,7 @@ function propagateMu(wme: FuzzyWME) {
 
 function run() {
   do {
-    options.trace && (`Cycle ${cycle}`);
+    options.trace && console.log(`### Cycle ${cycle}`);
     const conflicts = findConflictSet();
     if (conflicts.length === 0) {
       options.trace && console.log('No more productions');
@@ -662,7 +662,7 @@ function runDefuzzification() {
         }
         const added = rete.add(id, attr, finalNumericValue.toString());
         if (added) {
-          options.trace && console.log(`Added/replaced ${added.toString()}`);
+          options.trace && console.log(`Added ${added.toString()}`);
           const wmeJustification: WMEJustification = {
             wme: added,
             justifications: [{
@@ -783,6 +783,7 @@ function retractWMEandJustifications(found: WME): boolean {
     foundJustification.justifications = foundJustification.justifications.filter(jj => jj !== retractableJustification);
     if (foundJustification.justifications.length === 0) {
       rete.removeWME(found);
+      options && console.log(`Retracted ${found.toString()}`);
       justifications = justifications.filter(j => j !== foundJustification);
     }
     return true;
@@ -830,8 +831,11 @@ function explainWME(found: WME, indentation: string, visited: WME[]) {
         return '';
       }
       const linePrefix = (indentation) + '└';
-      const line = linePrefix + `[Fuzzification of: ${crispWME.toString()}]\n`;
-      return line;
+      const line = linePrefix + `[Fuzzification of:]\n`;
+      const line2 = (indentation) + ` └${crispWME.toString()}]\n`;
+      const newVisited = [...visited, found];
+      const s = explainWME(crispWME, indentation + '   ', newVisited);
+      return line + line2 + s;
     }
   } else {
     let ret = '';
