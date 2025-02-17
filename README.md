@@ -9,6 +9,7 @@ Options
   -s, --strategy       Conflict resolution strategy [optional]
   -c, --schema-check   Enable schema check before reading file [optional]
   -i, --interactive    Launch interactive session after running [optional]
+  -t, --trace          Enable tracing [optional]  
 ```
 Option `-f` is the default option so one can specify the file directly.
 
@@ -95,7 +96,7 @@ Because adding `(robbin fly can)` invalidates the condition `-{(<species> fly <_
 the token from the production in this cycle is invalidated and the fact `(robbin fly can)` is removed in the next.
 
 To work around that, we use the Stratified (Manual) strategy on file [test2.rete](./test2.rete). Two rules are used,
-in two consecutive strata:
+in two consecutive strata, and the actual logic which uses default values, lies in a subsequent stratum:
 
 ```
 (   (<species> is-a bird)
@@ -105,11 +106,25 @@ in two consecutive strata:
         (<species> fly-prepare can)
     )
 )
-
+#stratum
 (   (<species> fly-prepare can)
 -> "2. Default values commit"
     (!
         (<species> fly can)
+    )
+)
+#stratum
+(   (<species> fly can)
+-> "3. Hunting possibility by shooting"
+    (!
+        (<species> hunting-possible-by shooting)
+    )
+)
+
+(   (<species> fly cannot)
+-> "3. Hunting possibility by shooting or chasing"
+    (!  (<species> hunting-possible-by shooting)
+        (<species> hunting-possible-by chasing)
     )
 )
 ```
@@ -186,10 +201,19 @@ schema has been adequately been documented using `#schema` directives. Once can 
 the chatbot will ask for clarifications or propose Rete-next queries. The user is given the option to run them or not.
 One can clear the chat with the "clear" command and start a new conversation.
 
-### Fuzzy ....
+### Fuzzy Inference
+Rete-reasoner has a full implementation of fuzzy inference, built on top of the basic fuzzification operation in Rete-next. You
+are advised to brush up [on the basic notions in the readme](https://github.com/dsouflis/rete-next/blob/main/README-fuzzy.md).
+It is full integrated with the Truth Maintenance System.
 
+Let us work on the included example, starting from the directives that define the fuzzy operations. Directive `#fuzzy` has
+many forms that provide various configuration elements for fuzzy logic.
 ```
  #fuzzy [configuration]         Configure various aspects of the fuzzy operations
+
+ system min-max|multiplicative
+ Purpose: Configure what fuzzy system will be used. Options are "min-max" and "multiplicative"
+ Example: #fuzzy system min-max
 
  Configuration elements:
  kind [variablekind] [fuzzy-value]:sigmoid [a] [c], [...more...]
@@ -199,8 +223,21 @@ One can clear the chat with the "clear" command and start a new conversation.
  var [variablename] [variablekind]
  Purpose: Define a fuzzy variable that is of a previously defined kind
  Example: #fuzzy var food excellent-poor
-
- system min-max|multiplicative
- Purpose: Configure what fuzzy system will be used. Options are "min-max" and "multiplicative"
- Example: #fuzzy system min-max
 ```
+The first form is the `#fuzzy system` directive, that selects among two FuzzySystems. Min-max and Multiplicative. The
+selection of Fuzzy System dictates how the conjuction of fuzzy membership values in a token (representing a 
+conjunction of left-hand-side conditions) is computed, and how the disjunction of all justifications, from all rules
+that have resulted in asserting a particular fuzzy variable, is computed to provide the crisp value for it.
+
+The second form is the `#fuzzy kind` directive, that defines a new kind of fuzzy variable. Because Rete-next has a very
+elementary implementation of defuzzification (as presented in the signature of `FuzzyVariable::computeValueForFuzzyMembershipValue`),
+the fuzzy values that can be defined for the kind, can make sense only if they are two, representing the two opposite
+sides. Or else there could not be a reversible fuzzification computation. For example, if there were values with "humpy"
+membership functions, the fuzzy variable kind would not be reversible. This is an open avenue for development. Proper
+defuzzification is done using function composition and some form of centroid computation to produce the crisp value.
+However, it is still useful the way it is defined now.
+
+The third form is the `#fuzzy var` directive, that introduces a new fuzzy variable of an already defined kind. The 
+name of the variable is used as the attribute (middle value) of WMEs, in a dual role. On the one hand, there are 
+WMEs of the form `(<id> attr <num>)` that encode crisp input and crisp output values. On the other hand, there are 
+conditions and asserted FuzzyWMEs of the form `(<id> attr <fuzzy-value>)`.
