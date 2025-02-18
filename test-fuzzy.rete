@@ -1,5 +1,5 @@
 #schemacheck on
-#fuzzy kind excellent-poor excellent:sigmoid 4 0.7, poor:sigmoid -4 0.3
+#fuzzy kind excellent-poor excellent:sigmoid 10 0.7, poor:sigmoid -10 0.3
 #fuzzy kind small-big big:sigmoid 4 0.7, small:sigmoid -4 0.3
 #fuzzy var food excellent-poor
 #fuzzy var service excellent-poor

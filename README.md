@@ -233,11 +233,67 @@ The second form is the `#fuzzy kind` directive, that defines a new kind of fuzzy
 elementary implementation of defuzzification (as presented in the signature of `FuzzyVariable::computeValueForFuzzyMembershipValue`),
 the fuzzy values that can be defined for the kind, can make sense only if they are two, representing the two opposite
 sides. Or else there could not be a reversible fuzzification computation. For example, if there were values with "humpy"
-membership functions, the fuzzy variable kind would not be reversible. This is an open avenue for development. Proper
-defuzzification is done using function composition and some form of centroid computation to produce the crisp value.
-However, it is still useful the way it is defined now.
+membership functions, the fuzzy variable kind would not be reversible. This is an open avenue for development. For the
+time being, only the sigmoid membership function is available.
+
+**Fuzzy Membership Function**
+
+![Sigmoid membership function](./img/sigmoid-definition.png)
 
 The third form is the `#fuzzy var` directive, that introduces a new fuzzy variable of an already defined kind. The 
-name of the variable is used as the attribute (middle value) of WMEs, in a dual role. On the one hand, there are 
-WMEs of the form `(<id> attr <num>)` that encode crisp input and crisp output values. On the other hand, there are 
-conditions and asserted FuzzyWMEs of the form `(<id> attr <fuzzy-value>)`.
+name of the variable is used as the attribute (middle value) of WMEs, in a dual role. 
+- Crisp values: On the one hand, there are WMEs of the form `(<id> attr <num>)` that encode crisp input and crisp 
+output values. These WMEs are either *axiomatic* or inserted automatically by the defuzzification process, and are unique 
+per id.
+- Fuzzy values: On the other hand, there are FuzzyWMEs of the form `(<id> attr <fuzzy-value>)`. The FuzzyWMEs
+can be multiple and are asserted by fuzzy rules. They are the crisp values' way to fuzzily produce other crisp values.
+
+Let us examine fuzzy inference end-to-end with respect to one fuzzy production. The configuration directives are also
+shown, as are some test facts.
+
+```
+#fuzzy kind excellent-poor excellent:sigmoid 4 0.7, poor:sigmoid -4 0.3
+#fuzzy var food excellent-poor
+#fuzzy var service excellent-poor
+#fuzzy system multiplicative
+((<x> food excellent)(<x> service poor) -> "excellent food but poor service" (! (<x> tip small)))
+(! (B1 food 0.3) (B1 service 0.9))
+```
+
+**Fuzzy value "excellent"**
+
+![Fuzzy value "excellent"](./img/sigmoid-excellent.png)
+
+**Fuzzy value "poor"**
+
+![Fuzzy value "poor"](./img/sigmoid-poor.png)
+
+Production "excellent food and service" has two conditions
+
+The first condition `(<x> food excellent)` does a fuzzy matching with `(B1 food 0.3)` and adds the following FuzzyWME
+to the token: `(B1 food excellent)[0.017986209962091566]`.
+
+The first condition `(<x> service poor)` also does a fuzzy matching with `(B1 service 0.9)` and adds the following
+FuzzyWME to the token: `(B1 service poor)[0.002472623156634772]`. As you can see, both facts match to a small degree
+with the corresponding conditions, because the conditions skew to the opposite end of the interval 0 to 1 from where
+their values are. But the degrees are not zero.
+
+When production "excellent food and service" fires with this token, two things happen. Firstly, the fuzzy conjunction of the
+μ-values of the FuzzyWMEs in the token is calculated, according to the configured Fuzzy System. Secondly, FuzzyWMEs
+having the resulting μ-value are asserted according to the production's RHS. In this case, `(! (<x> tip small))`.
+
+These FuzzyWMEs are either new or existing. If they exist already, then additional justifications are recorded for them,
+and the new μ-value is computed, as the fuzzy disjunction for all justifications for this combination of a fuzzy value 
+and a fuzzy variable, according to the current Fuzzy System. This resulting value is propagated through the justification
+tree to all affected FuzzyWMEs.
+
+During each cycle, where FuzzyWMEs are asserted by fuzzy productions, like this one, there may be more than one 
+FuzzyWMEs for the same fuzzy variable, `tip` in our case, at most one per fuzzy value possible. A defuzzification process 
+runs at the end of each cycle, whereby a single crisp WME is kept current in the knowledge base. For all FuzzyWMEs
+corresponding to a different fuzzy value for this fuzzy variable, for every id, the reverse of the membership value function 
+of the fuzzy value is computed and the average of those crisp values is computed to produce a single crisp value for the 
+fuzzy variable. A single crisp WME is maintained in the knowledge base for each fuzzy variable.
+
+These resulting crisp WMEs are used as input facts in other productions, and this process is repeated until the
+knowledge base converges, as usual.
+
