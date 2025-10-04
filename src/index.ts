@@ -19,10 +19,12 @@ import {
   ProductionNode,
   Rete,
   Token,
-  WME
+  WME,
+  AggregateCondition,
+  NegativeCondition,
+  PositiveCondition,
 } from 'rete-next/index';
 import {ParseError, parseRete, ParseSuccess} from 'rete-next/productions0';
-import {AggregateCondition, NegativeCondition, PositiveCondition} from "rete-next";
 
 type ProductionJustification = {
   token:Token,
@@ -122,6 +124,7 @@ interface Options extends CommandLineOptions{
   schemaCheck: boolean,
   interactive: boolean,
   trace: boolean,
+  reactive: boolean,
 }
 
 class MinMaxFuzzySystem implements FuzzySystem {
@@ -154,6 +157,7 @@ const optionDefinitions: OptionDefinition[] = [
   { name: 'schema-check', alias: 'c', type: Boolean, defaultValue: false},
   { name: 'interactive', alias: 'i', type: Boolean, defaultValue: false},
   { name: 'trace', alias: 't', type: Boolean, defaultValue: false},
+  { name: 'reactive', alias: 'r', type: Boolean, defaultValue: false},
 ];
 
 const options = commandLineArgs(optionDefinitions) as Options;
@@ -165,6 +169,7 @@ if(!options.file) {
   console.warn('  -c, --schema-check   Enable schema check before reading file [optional]');
   console.warn('  -i, --interactive    Launch interactive session after running [optional]');
   console.warn('  -t, --trace          Enable tracing [optional]');
+  console.warn('  -r, --reactive       Reactive operation [optional]');
   process.exit();
 }
 
@@ -403,7 +408,7 @@ function fuzzyDirectiveHandling(prompt: string) {
   }
 }
 
-function readInputInterpretDirectivesAndParseAndExecute(input) {
+function readInputInterpretDirectivesAndParseAndExecute(input: string) {
   const lines = input.split('\n');
   let clauses = '';
   for (const line of lines) {
@@ -424,7 +429,7 @@ function readInputInterpretDirectivesAndParseAndExecute(input) {
   }
 }
 
-let fileContents: string = await readFile(options.file, 'UTF8' as any) as string; //Ugly hack to counteract bad typing
+let fileContents: string = await readFile(options.file, 'UTF8' as any) as unknown as string; //Ugly hack to counteract bad typing
 
 function firstMatchConflictResolution(conflicts: ConflictItem[]): ConflictItem | undefined {
   return conflicts[0];
@@ -537,19 +542,21 @@ function run() {
     let production = conflictItem.productionSpec.production;
     options.trace && console.log(`Firing production "${production.rhs}"`);
     let [tokensToAdd, tokensToRemove] = production.willFire();
-    for (const token of tokensToRemove) {
-      const foundJustifications = justifications
-        .filter(j => j.justifications
-          .filter(jj => 'prod' in jj).map(jj => jj as ProductionJustification)
-          .find(jj => jj.prod === production.rhs && jj.token === token));
-      for (const foundJustification of foundJustifications) {
-        foundJustification.justifications = foundJustification
-          .justifications
-          .filter(jj => 'prod' in jj).map(jj => jj as ProductionJustification)
-          .filter(jj => jj.prod === production.rhs && jj.token !== token);
-        if(foundJustification.justifications.length === 0) {
-          options.trace && console.log(`No justifications left, will be removed:`, foundJustification.wme.toString());
-          rete.removeWME(foundJustification.wme);
+    if (!options.reactive) {
+      for (const token of tokensToRemove) {
+        const foundJustifications = justifications
+          .filter(j => j.justifications
+            .filter(jj => 'prod' in jj).map(jj => jj as ProductionJustification)
+            .find(jj => jj.prod === production.rhs && jj.token === token));
+        for (const foundJustification of foundJustifications) {
+          foundJustification.justifications = foundJustification
+            .justifications
+            .filter(jj => 'prod' in jj).map(jj => jj as ProductionJustification)
+            .filter(jj => jj.prod === production.rhs && jj.token !== token);
+          if (foundJustification.justifications.length === 0) {
+            options.trace && console.log(`No justifications left, will be removed:`, foundJustification.wme.toString());
+            rete.removeWME(foundJustification.wme);
+          }
         }
       }
     }
@@ -564,25 +571,33 @@ function run() {
         let mu: number | undefined = tokenToMu(token);
         const [wmesAdded, wmesExisting] = rete.addWMEsFromConditions(conflictItem.productionSpec.rhsAssert, variablesInToken, mu);
         for (const wme of wmesAdded) {
-          justifications.push({
-            wme,
-            justifications: [{
-              prod: production.rhs,
-              token,
-            }]
-          })
+          if (!options.reactive) {
+            justifications.push({
+              wme,
+              justifications: [{
+                prod: production.rhs,
+                token,
+              }]
+            })
+          } else {
+            justifications.push({wme, justifications: [{axiomatic: true}]});
+          }
         }
         options.trace && wmesAdded.length && console.log('Added ', wmesAdded.map(w => w.toString()).join());
         for (const wme of wmesExisting) {
-          let wmeJustification = justifications.find(j => j.wme === wme);
-          if(wmeJustification) {
-            wmeJustification.justifications.push({
-              prod: production.rhs,
-              token,
-            });
-            if(fuzzySystem && wme instanceof FuzzyWME) {
-              propagateMu(wme);
+          if (!options.reactive) {
+            let wmeJustification = justifications.find(j => j.wme === wme);
+            if (wmeJustification) {
+              wmeJustification.justifications.push({
+                prod: production.rhs,
+                token,
+              });
+              if (fuzzySystem && wme instanceof FuzzyWME) {
+                propagateMu(wme);
+              }
             }
+          } else {
+            retractWMEandJustifications(wme);
           }
         }
         options.trace && wmesExisting.length && console.log('Added justifications for', wmesExisting.map(w => w.toString()).join());
@@ -649,7 +664,6 @@ function runDefuzzification() {
         }
         const finalNumericValue = sum / wmes.length;
         const crispWmes = rete.working_memory.filter(w => w.fields[0] === id && w.fields[1] === attr && !Number.isNaN(parseFloat(w.fields[2])));
-        let foundWithSameValue = false;
         if(crispWmes.length > 1) {
           console.warn(`More than one crisp WME found for fuzzy variable ${attr}`);
         } else if(crispWmes.length) {
@@ -809,7 +823,7 @@ function interactiveRetract(prompt: string) {
   }
 }
 
-function explainWME(found: WME, indentation: string, visited: WME[]) {
+function explainWME(found: WME, indentation: string, visited: WME[]): string {
   if(visited.includes(found)) {
     let ret = (indentation) + '(*)\n';
     return ret;
@@ -1075,11 +1089,11 @@ function queryExtractor(s: string): string | null {
   let parsing = false;
   for (const line of lines) {
     const trimmedLine = line.trim();
-    if(!parsing && line.startsWith('```')) {
+    if(!parsing && trimmedLine.startsWith('```')) {
       query = '';
       parsing = true;
     } else if(parsing) {
-      if(line.startsWith('```')) {
+      if(trimmedLine.startsWith('```')) {
         parsing = false;
       } else {
         query += line + '\n';

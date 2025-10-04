@@ -9,7 +9,8 @@ Options
   -s, --strategy       Conflict resolution strategy [optional]
   -c, --schema-check   Enable schema check before reading file [optional]
   -i, --interactive    Launch interactive session after running [optional]
-  -t, --trace          Enable tracing [optional]  
+  -t, --trace          Enable tracing [optional]
+  -r, --reactive       Reactive operation [optional]
 ```
 Option `-f` is the default option so one can specify the file directly.
 
@@ -19,6 +20,17 @@ Queries are executed after running the system.
 
 ## Running
 Running the system cycles until the system converges into a stable state, or if a maximum number of cycles is reached.
+
+### Reactive Operation
+The `--reactive` (or `-r`) option disables the justification-based Truth Maintenance System and enables "reactive" operation mode. In this mode:
+
+- Productions assert WMEs with **axiomatic justifications** only (not production justifications)
+- When a production's RHS includes a WME that **already exists** in the working memory, that WME is **toggled out** (removed) instead of adding another justification
+- This toggle behavior eliminates the need for special "reactive retraction" syntax in the RHS
+- Only axiomatically justified WMEs exist in reactive mode
+- The system behaves as a traditional reactive production system without truth maintenance
+
+This mode is useful when you want simple reactive behavior where productions directly add and remove facts, similar to systems like Drools without the TMS layer (logical assertions).
 
 ### Conflict Resolution Strategy Argument
 The optional argument after the input file path is used to select a Conflict Resolution Strategy (see below).
@@ -197,7 +209,7 @@ of the knowledge base is computed.
 
 ### Chatting with the knowledge base
 One can chat with the knowledge base, with the prerequisite that the OPENAI_API_KEY env var must be set, and the
-schema has been adequately been documented using `#schema` directives. Once can formulate queries for information and
+schema has been adequately been documented using `#schema` directives. One can formulate queries for information and
 the chatbot will ask for clarifications or propose Rete-next queries. The user is given the option to run them or not.
 One can clear the chat with the "clear" command and start a new conversation.
 
