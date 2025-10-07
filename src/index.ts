@@ -600,7 +600,11 @@ function run() {
             retractWMEandJustifications(wme);
           }
         }
-        options.trace && wmesExisting.length && console.log('Added justifications for', wmesExisting.map(w => w.toString()).join());
+        if(options.trace) {
+          if (!options.reactive) {
+            wmesExisting.length && console.log('Added justifications for', wmesExisting.map(w => w.toString()).join());
+          }
+        }
         runDefuzzification();
       }
     }
