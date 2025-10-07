@@ -289,6 +289,20 @@ function parseAndExecute(input: string) {
     } else if (variables && !rhsAssert) { //Query
       queries.push({lhs, variables});
       schemaCheck && checkConditionsAgainstSchema(lhs);
+      const stringToStringMaps = rete.query(lhs, variables);
+      if(stringToStringMaps.length) {
+        console.log('Yes.');
+      } else {
+        console.log('No.');
+      }
+      for (let i = 0; i < stringToStringMaps.length; i++) {
+        const stringToStringMap = stringToStringMaps[i];
+        let entries = Object.entries(stringToStringMap);
+        for (const [key, value] of entries) {
+          console.log(`${i}||${key}:${value}`);
+        }
+      }
+
     } else if (rhs) {
       const unsafeCondition = !!lhs.find(c => c instanceof AggregateCondition
         || c instanceof NegativeCondition || c instanceof PositiveCondition
