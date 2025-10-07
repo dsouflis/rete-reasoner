@@ -268,7 +268,8 @@ function checkConditionsAgainstSchema(lhs: GenericCondition[]) {
   }
 }
 
-function parseAndExecute(input: string) {
+function parseAndExecute(input: string): boolean {
+  let changed = false;
   const reteParseProductions = parseRete(input);
 
   if(!('specs' in reteParseProductions)) {
@@ -286,6 +287,7 @@ function parseAndExecute(input: string) {
         justifications.push({wme, justifications: [{axiomatic: true}]});
         schemaCheck && checkWMEAgainstSchema(wme);
       }
+      changed = true;
     } else if (variables && !rhsAssert) { //Query
       queries.push({lhs, variables});
       schemaCheck && checkConditionsAgainstSchema(lhs);
@@ -320,8 +322,11 @@ function parseAndExecute(input: string) {
         checkConditionsAgainstSchema(lhs);
         rhsAssert && checkConditionsAgainstSchema(rhsAssert);
       }
+      changed = true;
     }
   }
+
+  return changed;
 }
 
 const stratumDirective = '#stratum';
@@ -422,7 +427,7 @@ function fuzzyDirectiveHandling(prompt: string) {
   }
 }
 
-function readInputInterpretDirectivesAndParseAndExecute(input: string) {
+function readInputInterpretDirectivesAndParseAndExecute(input: string): boolean {
   const lines = input.split('\n');
   let clauses = '';
   for (const line of lines) {
@@ -439,8 +444,9 @@ function readInputInterpretDirectivesAndParseAndExecute(input: string) {
   }
   clauses = clauses.trim();
   if(clauses) {
-    parseAndExecute(clauses);
+    return parseAndExecute(clauses);
   }
+  return false;
 }
 
 let fileContents: string = await readFile(options.file, 'UTF8' as any) as unknown as string; //Ugly hack to counteract bad typing
@@ -950,9 +956,11 @@ function interactiveExplain(prompt: string) {
 }
 
 function interactiveRun(prompt: string) {
-  readInputInterpretDirectivesAndParseAndExecute(prompt);
-  run();
-  showKnowledgeBase();
+  const changed = readInputInterpretDirectivesAndParseAndExecute(prompt);
+  if (changed) {
+    run();
+    showKnowledgeBase();
+  }
 }
 
 interface OpenAiState {
