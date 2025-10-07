@@ -1,0 +1,74 @@
+#schema _ is-a _ "Object _ is-a instance of class _ OR Class _ is a is-a class _"
+#schema _ transitive-closure-of "Attribute _ is the transitive-closure-of attribute _"
+#schema _ is-a_ _ "Object _ is-a instance of class _ transitively OR Class _ is a is-a class _ transitively"
+#schema _ allows-attribute _ "Class _ allows-attribute _"
+#schema _ allows-attribute_ _ "Class _ allows-attribute _ transitively"
+#schema _ in _ "Locatable _ is in location _"
+#schema _ in_ _ "Locatable _ is in location _ transitively"
+#schema _ connects-to _ "Connector _ connects-to locatable _"
+
+(
+    (<attr_> transitive-closure-of <attr>)
+    (<obj1> <attr> <val>)
+->  "Transitive closure base case"
+    (! (<obj1> <attr_> <val>))
+)
+
+(
+    (<attr_> transitive-closure-of <attr>)
+    (<obj1> <attr> <val>)
+    (<val> <attr_> <val2>)
+->  "Transitive closure recursive case"
+    (! (<obj1> <attr_> <val2>))
+)
+
+(!
+    (person is-a locatable)
+    (table is-a locatable)
+    (room is-a location)
+    (building is-a location)
+    (street is-a location)
+    (door is-a connector)
+)
+
+(!
+    (locatable allows-attribute in)
+    (location allows-attribute in)
+    (connector allows-attribute connects-to)
+    (is-a_ transitive-closure-of is-a)
+    (in_ transitive-closure-of in)
+    (allows-attribute_ transitive-closure-of allows-attribute)
+)
+
+(
+    (<ctor> is-a_ connector)
+    (<ctor> openable true)
+    (<ctor> open false)
+    (action try-open <ctor>)
+-> "Open door"
+    (!
+        (<ctor> open false)
+        (action try-open <ctor>)
+        (<ctor> open true)
+    )
+)
+
+(!
+    (agent is-a person)
+    (table1 is-a table)
+    (room1 is-a room)
+    (building1 is-a building)
+    (room1 in building1)
+    (agent in room1)
+    (table1 in room1)
+    (street1 is-a street)
+    (door1 is-a door)
+    (door1 openable true)
+    (door1 open false)
+    (door1 connects-to room1)
+    (door1 connects-to street1)
+)
+
+(!
+    (action try-open door1)
+)
