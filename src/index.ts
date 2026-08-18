@@ -1,4 +1,6 @@
-import {readFile} from 'fs/promises';
+import {existsSync} from 'fs';
+import {readFile, writeFile} from 'fs/promises';
+import {parse as parsePath, join as joinPath} from 'path';
 import {confirm, input} from '@inquirer/prompts';
 import commandLineArgs, {CommandLineOptions, OptionDefinition} from 'command-line-args'
 import {OpenAI} from 'openai';
@@ -9,6 +11,7 @@ import {
 } from "openai/resources";
 import {
   Condition,
+  deserializeCondition,
   evalVariablesInToken,
   Field,
   FieldType,
@@ -18,6 +21,9 @@ import {
   GenericCondition,
   ProductionNode,
   Rete,
+  SerializedGenericCondition,
+  SerializedNetwork,
+  serializeCondition,
   Token,
   WME,
   AggregateCondition,
@@ -52,6 +58,16 @@ type Query = {
 type WMEJustification = {
   wme: WME,
   justifications: Justification[],
+};
+
+type SerializedJustification =
+  | { kind: 'prod', prod: string, tokenWmes: string[] }
+  | { kind: 'wmes', wmes: string[] }
+  | { kind: 'axiomatic' };
+
+type SerializedWMEJustification = {
+  wme: string, // WME.toString()
+  justifications: SerializedJustification[],
 };
 
 type conflictResolutionFunction = (conflicts: ConflictItem[]) => ConflictItem | undefined;
@@ -118,6 +134,20 @@ class DeclaredFuzzyVariable implements FuzzyVariable {
   }
 }
 
+type SerializedSession = {
+  network: SerializedNetwork, // from rete-next
+  justifications: SerializedWMEJustification[],
+  rhsAsserts: (SerializedGenericCondition[] | null)[], // parallel to network.productions
+  strata: number[][], // indices into the productions array
+  queries: { lhs: SerializedGenericCondition[], variables: string[] }[],
+  patternsForAttributes: { [attr: string]: PatternsForAttribute[] }, // already plain data
+  schemaCheck: boolean,
+  fuzzyVariableKinds: FuzzyVariableKind[], // already plain data
+  fuzzyVariableRegistrations: { name: string, kind: FuzzyVariableKind }[], // rete.fuzzyVariables, in order
+  fuzzySystem?: 'min-max' | 'multiplicative',
+  nonDeterministicFixpointPossible: boolean,
+};
+
 interface Options extends CommandLineOptions{
   file: string,
   strategy: string,
@@ -125,6 +155,7 @@ interface Options extends CommandLineOptions{
   interactive: boolean,
   trace: boolean,
   reactive: boolean,
+  clean: boolean,
 }
 
 class MinMaxFuzzySystem implements FuzzySystem {
@@ -158,6 +189,7 @@ const optionDefinitions: OptionDefinition[] = [
   { name: 'interactive', alias: 'i', type: Boolean, defaultValue: false},
   { name: 'trace', alias: 't', type: Boolean, defaultValue: false},
   { name: 'reactive', alias: 'r', type: Boolean, defaultValue: false},
+  { name: 'clean', alias: 'l', type: Boolean, defaultValue: false},
 ];
 
 const options = commandLineArgs(optionDefinitions) as Options;
@@ -170,6 +202,7 @@ if(!options.file) {
   console.warn('  -i, --interactive    Launch interactive session after running [optional]');
   console.warn('  -t, --trace          Enable tracing [optional]');
   console.warn('  -r, --reactive       Reactive operation [optional]');
+  console.warn('  -l, --clean          Ignore any saved session and rebuild fresh from the productions file [optional]');
   process.exit();
 }
 
@@ -448,8 +481,6 @@ function readInputInterpretDirectivesAndParseAndExecute(input: string): boolean 
   }
   return false;
 }
-
-let fileContents: string = await readFile(options.file, 'UTF8' as any) as unknown as string; //Ugly hack to counteract bad typing
 
 function firstMatchConflictResolution(conflicts: ConflictItem[]): ConflictItem | undefined {
   return conflicts[0];
@@ -733,6 +764,81 @@ function showKnowledgeBase() {
       console.log(`${wme.toString()}: ${jStrings.join(',')}`);
     }
   }
+}
+
+function serializeJustification(j: Justification): SerializedJustification {
+  if ('prod' in j) return {kind: 'prod', prod: j.prod, tokenWmes: j.token.toArray().map(w => w.toString())};
+  if ('wmes' in j) return {kind: 'wmes', wmes: j.wmes.map(w => w.toString())};
+  return {kind: 'axiomatic'};
+}
+
+async function saveSession(path: string) {
+  const session: SerializedSession = {
+    network: rete.exportNetwork(),
+    justifications: justifications.map(j => ({
+      wme: j.wme.toString(),
+      justifications: j.justifications.map(serializeJustification),
+    })),
+    rhsAsserts: productions.map(p => p.rhsAssert ? p.rhsAssert.map(serializeCondition) : null),
+    strata: strata.map(stratum => stratum.map(ps => productions.indexOf(ps))),
+    queries: queries.map(q => ({lhs: q.lhs.map(serializeCondition), variables: q.variables})),
+    patternsForAttributes,
+    schemaCheck,
+    fuzzyVariableKinds,
+    fuzzyVariableRegistrations: (rete.fuzzyVariables as DeclaredFuzzyVariable[])
+      .map(fv => ({name: fv.name, kind: fv.fuzzyVariableKind})),
+    fuzzySystem: fuzzySystem instanceof MinMaxFuzzySystem ? 'min-max'
+      : fuzzySystem instanceof MultiplicativeFuzzySystem ? 'multiplicative' : undefined,
+    nonDeterministicFixpointPossible,
+  };
+  await writeFile(path, JSON.stringify(session));
+  options.trace && console.log(`Session saved to ${path}`);
+}
+
+function deserializeJustification(sjj: SerializedJustification): Justification {
+  if (sjj.kind === 'prod') {
+    const prodNode = rete.productions.find(p => p.rhs === sjj.prod)!;
+    const token = prodNode.items.find(
+      t => t.toArray().map(w => w.toString()).join(' ') === sjj.tokenWmes.join(' ')
+    )!;
+    return {prod: sjj.prod, token};
+  }
+  if (sjj.kind === 'wmes') {
+    return {wmes: sjj.wmes.map(s => rete.working_memory.find(w => w.toString() === s) as FuzzyWME)};
+  }
+  return {axiomatic: true};
+}
+
+async function loadSession(path: string) {
+  const session: SerializedSession = JSON.parse(await readFile(path, 'utf8'));
+
+  fuzzyVariableKinds.push(...session.fuzzyVariableKinds);
+  for (const reg of session.fuzzyVariableRegistrations) {
+    rete.addFuzzyVariable(new DeclaredFuzzyVariable(reg.name, reg.kind));
+  }
+  if (session.fuzzySystem === 'min-max') fuzzySystem = new MinMaxFuzzySystem();
+  else if (session.fuzzySystem === 'multiplicative') fuzzySystem = new MultiplicativeFuzzySystem();
+
+  rete.restoreNetwork(session.network); // structure + content, no WME replay
+
+  for (let i = 0; i < rete.productions.length; i++) {
+    productions.push({
+      production: rete.productions[i],
+      rhsAssert: session.rhsAsserts[i] ? session.rhsAsserts[i]!.map(deserializeCondition) : undefined,
+    });
+  }
+  strata = session.strata.map(idxArr => idxArr.map(i => productions[i]));
+  stratumBeingRead = strata.length - 1;
+  queries.push(...session.queries.map(q => ({lhs: q.lhs.map(deserializeCondition), variables: q.variables})));
+  Object.assign(patternsForAttributes, session.patternsForAttributes);
+  schemaCheck = session.schemaCheck;
+  nonDeterministicFixpointPossible = session.nonDeterministicFixpointPossible;
+
+  justifications = session.justifications.map(sj => ({
+    wme: rete.working_memory.find(w => w.toString() === sj.wme)!,
+    justifications: sj.justifications.map(deserializeJustification),
+  }));
+  options.trace && console.log(`Session loaded from ${path}`);
 }
 
 function interactiveHelp(prompt: string) {
@@ -1245,7 +1351,14 @@ async function interactive() {
   } while (true);
 }
 
-readInputInterpretDirectivesAndParseAndExecute(fileContents);
+const snapshotPath = joinPath(parsePath(options.file).dir, parsePath(options.file).name + '.json');
+
+if (!options.clean && existsSync(snapshotPath)) {
+  await loadSession(snapshotPath);
+} else {
+  const fileContents: string = await readFile(options.file, 'UTF8' as any) as unknown as string; //Ugly hack to counteract bad typing
+  readInputInterpretDirectivesAndParseAndExecute(fileContents);
+}
 
 if (nonDeterministicFixpointPossible) {
   console.log('Non-deterministic fixpoint cannot be ruled out');
@@ -1263,3 +1376,5 @@ showKnowledgeBase();
 if(options.interactive) {
   await interactive();
 }
+
+await saveSession(snapshotPath);

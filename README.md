@@ -11,6 +11,7 @@ Options
   -i, --interactive    Launch interactive session after running [optional]
   -t, --trace          Enable tracing [optional]
   -r, --reactive       Reactive operation [optional]
+  -l, --clean          Ignore any saved session and rebuild fresh from the productions file [optional]
 ```
 Option `-f` is the default option so one can specify the file directly.
 
@@ -41,6 +42,26 @@ The reasoner uses a justification-based truth maintenance system, with a similar
 in rete-next. Cycles are not detected by this implementation, which can lead to cycles
 (but see "Stratified Conflict Detection Strategy" on a way to work around this to implement
 default logic).
+
+## Session Persistence
+Every run saves its final state - the whole Rete network (productions, working memory, matched
+tokens) plus everything layered on top of it (justifications, RHS-assert clauses, queries, schema
+patterns, fuzzy configuration) - to a JSON file next to the input file: `-f foo.rete` saves to
+`foo.json` (the input file's extension, whatever it is, is swapped for `.json`). This is built on
+top of [rete-next](https://github.com/dsouflis/rete-next)'s network snapshot facility, described in
+more detail [there](https://github.com/dsouflis/rete-next/blob/main/README-snapshot.md).
+
+By default, if `foo.json` already exists, it is loaded instead of `foo.rete` - reproducing the exact
+knowledge-base state from the end of the previous run (including anything an interactive session
+asserted, retracted, or fired) without re-parsing the productions file or replaying any facts
+through the matcher. This means an interactive session's work is no longer lost when you `quit`:
+run it again (without `-l`) and pick up right where you left off.
+
+Pass `-l`/`--clean` to ignore any existing `foo.json` and rebuild fresh from `foo.rete`, as every
+run did before this feature existed. A clean run still saves a fresh `foo.json` at the end - `-l`
+means "ignore old state," not "don't persist new state." One consequence of loading from JSON by
+default: once `foo.json` exists, editing `foo.rete` has no effect on subsequent runs until you pass
+`-l` (or delete `foo.json`).
 
 ## Conflict Resolution Strategies
 In each cycle, the conflict set is computed and a conflict resolution strategy is invoked to select which
